@@ -28,6 +28,7 @@ spec.loader.exec_module(external_adapter)
 
 from provider_registry import ROUTES, config
 from model_profiles import load_profiles, apply_profile, profile_diagnostics
+from portable_compaction import COMPACTION_MODEL, checkpoint_events
 PROFILE_SETTINGS, PROFILES = load_profiles(config)
 EXTERNAL = set(ROUTES)
 DUMMY = 'sk-offline-local-test-only-no-real-provider-access'
@@ -68,6 +69,18 @@ def prepare_routed_request(core, target, headers, body):
     encoding = next((value for name,value in headers if name.lower() == 'content-encoding'), None)
     incoming = json.loads(decode_body(body, encoding))
     if not isinstance(incoming,dict) or not isinstance(incoming.get('model'),str): raise GatewayError('Invalid Responses model')
+    history = incoming.get('input')
+    triggers = [index for index,item in enumerate(history) if isinstance(item,dict) and item.get('type') == 'compaction_trigger'] if isinstance(history,list) else []
+    if triggers:
+        if triggers != [len(history)-1] or set(history[-1]) - {'type','id'}:
+            raise GatewayError('Invalid native compaction trigger',422)
+        requested_model = incoming['model']
+        if requested_model in EXTERNAL:
+            if COMPACTION_MODEL not in core.native_models:
+                raise GatewayError('Portable compaction requires the signed-in ChatGPT compaction model',422)
+            # This is a checkpoint operation only. The desktop's selected model
+            # and native per-thread settings remain untouched.
+            incoming = {**incoming,'model':COMPACTION_MODEL}
     if incoming['model'] in EXTERNAL or incoming['model'] in core.native_models:
         incoming = apply_profile(incoming, PROFILE_SETTINGS, PROFILES)
         headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
@@ -96,7 +109,23 @@ def prepare_routed_request(core, target, headers, body):
             incoming = {**incoming,'input':retained}
             headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
             body = json.dumps(incoming).encode()
-    return core.prepare('POST',target,headers,body), incoming, removed
+        # All these input IDs are optional transport identifiers. Translating
+        # a function to a custom/search call can leave the old type's prefix.
+        # Retain call_id pairings and every opaque/encrypted native item.
+        optional_id_types = {'message','function_call','function_call_output','custom_tool_call',
+            'custom_tool_call_output','tool_search_call','tool_search_output','additional_tools','compaction_trigger'}
+        normalized = [({key:value for key,value in item.items() if key != 'id'} if isinstance(item,dict) and item.get('type') in optional_id_types and item.get('encrypted_content') is None and item.get('encrypted_function_args') is None else item) for item in incoming['input']]
+        if normalized != incoming['input']:
+            incoming = {**incoming,'input':normalized}
+            headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
+            body = json.dumps(incoming).encode()
+    prepared = core.prepare('POST',target,headers,body)
+    if triggers:
+        headers_identity = [(k,v) for k,v in prepared.headers if k.lower() != 'accept-encoding']+[('Accept-Encoding','identity')]
+        from dataclasses import replace
+        prepared = replace(prepared,kind='compaction',headers=tuple(headers_identity))
+        incoming = {**incoming,'model':requested_model}
+    return prepared, incoming, removed
 
 
 class MixedGateway(BaseHTTPRequestHandler):
@@ -178,7 +207,7 @@ class MixedGateway(BaseHTTPRequestHandler):
             event.update(profile_diagnostics(model, PROFILE_SETTINGS, PROFILES))
             if removed: event['openai_hosted_search_declarations_removed'] = removed
             record(event)
-            if model in EXTERNAL:
+            if prepared.provider != 'openai':
                 # The existing real service receives only its dummy local bearer.
                 # It holds the DPAPI provider keys and strips native private fields.
                 upstream = open_upstream(self.server.external_url, external_headers(), prepared.body)
@@ -187,7 +216,30 @@ class MixedGateway(BaseHTTPRequestHandler):
                 upstream = open_upstream(prepared.url, prepared.headers, prepared.body)
             with upstream:
                 streaming = True
-                if model in EXTERNAL:
+                if prepared.kind == 'compaction':
+                    if upstream.headers.get_content_type() not in {'text/event-stream','text/plain'}: raise GatewayError('Native checkpoint did not return an event stream',502)
+                    self.send_response(upstream.status)
+                    self.send_header('Content-Type','text/event-stream')
+                    self.send_header('Connection','close')
+                    self.end_headers()
+                    event['kind'] = 'compaction'
+                    event['compaction_model'] = json.loads(prepared.body)['model']
+                    try:
+                        for frame,decoded in checkpoint_events(upstream,prepared,open_upstream):
+                            self.wfile.write(frame); self.wfile.flush()
+                            if decoded and decoded.get('type') == 'response.completed':
+                                event['response_completed'] = True
+                                event['portable_summary_saved'] = True
+                    except (ValueError,OSError,TypeError,KeyError,AttributeError) as error:
+                        failure={'type':'error','code':'portable_compaction_failed','message':'Compaction could not create a verified portable checkpoint. The previous working history was retained.'}
+                        self.wfile.write(('data: '+json.dumps(failure)+'\n\n').encode());self.wfile.flush()
+                        event['portable_summary_saved'] = False
+                        event['compaction_failure_type'] = type(error).__name__
+                        if isinstance(error,urllib.error.HTTPError):
+                            event['native_summary_http_status'] = error.code
+                            event['native_summary_error'] = external_adapter.provider_error_diagnostic(error.read(65537))
+                    record(event)
+                elif prepared.provider != 'openai':
                     if upstream.headers.get_content_type() != 'text/event-stream': raise GatewayError('External service did not return an event stream', 502)
                     self.send_response(upstream.status)
                     self.send_header('Content-Type', 'text/event-stream')
