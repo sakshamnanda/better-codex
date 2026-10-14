@@ -40,6 +40,7 @@ _,catalog=prepare_configuration({'providers':{pid:{'endpoint':p['endpoint'],'def
 opaque='owned-native-checkpoint-runtime-fixture'
 summary='Owned fixture summary: earlier task requested a harmless terminal echo; previous lengthy assistant data was synthetic.'
 observed=[];failures=[];external_count=0;native_count=0;echo_received=False;gateway_events=[];runtime_errors=[]
+native_scenario=False;native_requests=[];native_long_reply=False;native_wire=[]
 
 class Headers:
     def get_content_type(self):return 'text/event-stream'
@@ -51,16 +52,16 @@ class Reply(io.BytesIO):
     def __enter__(self):return self
     def __exit__(self,*args):self.close()
 
-def events(output):
+def events(output,usage=None):
     values=[{'type':'response.created','response':{'id':'resp_fixture','status':'in_progress','output':[]}}]
     for index,item in enumerate(output):values.extend([
         {'type':'response.output_item.added','output_index':index,'item':item},
         {'type':'response.output_item.done','output_index':index,'item':item}])
-    values.append({'type':'response.completed','response':{'id':'resp_fixture','status':'completed','output':output}})
+    values.append({'type':'response.completed','response':{'id':'resp_fixture','status':'completed','output':output,**({'usage':usage} if usage else {})}})
     return b''.join(('data: '+json.dumps(v)+'\n\n').encode() for v in values)
 
 def upstream(url,headers,body=None):
-    global external_count,native_count,echo_received
+    global external_count,native_count,echo_received,native_long_reply
     try:
         payload=json.loads(body)
         native=url=='https://chatgpt.com/backend-api/codex/responses'
@@ -70,6 +71,18 @@ def upstream(url,headers,body=None):
             native_count+=1
             assert dict(headers).get('authorization')=='Bearer dummy-native-fixture'
             assert payload['model']=='gpt-6.1-sol'
+            if native_scenario:
+                native_requests.append(payload)
+                if any(v.get('type')=='compaction_trigger' for v in payload['input']):
+                    wire=events([{'type':'compaction','id':'cmp_native_fixture','encrypted_content':'owned-native-only-checkpoint'}])
+                    native_wire.append(wire)
+                    return Reply(wire)
+                assert payload.get('tool_choice')!='none','Native compaction attempted a portable summary'
+                usage={'input_tokens':100,'input_tokens_details':{'cached_tokens':0},'output_tokens':30000 if native_long_reply else 10,
+                    'output_tokens_details':{'reasoning_tokens':0},'total_tokens':30100 if native_long_reply else 110}
+                content='Owned lengthy native fixture. '*4000 if native_long_reply else 'Owned native continuation complete.'
+                native_long_reply=False
+                return Reply(events([{'type':'message','id':'msg_native_fixture','role':'assistant','content':[{'type':'output_text','text':content,'annotations':[]}]}],usage))
             if any(v.get('type')=='compaction_trigger' for v in payload['input']):
                 return Reply(events([{'type':'compaction','id':'cmp_runtime_fixture','encrypted_content':opaque}]))
             assert payload['input'][0]['type']=='compaction' and payload['tools']==[] and payload['tool_choice']=='none'
@@ -98,7 +111,7 @@ def upstream(url,headers,body=None):
         failures.append(type(error).__name__)
         raise
 
-old_open,old_record,old_cache=mixed.open_upstream,mixed.record,portable.CACHE
+old_open,old_record,old_cache,old_save=mixed.open_upstream,mixed.record,portable.CACHE,portable.save_summary
 mixed.open_upstream=upstream;mixed.record=lambda event:gateway_events.append({k:v for k,v in event.items() if k in {'gateway_error','kind','model'}});portable.CACHE=scratch/'context-cache'
 server=ThreadingHTTPServer(('127.0.0.1',0),mixed.MixedGateway);server.daemon_threads=True
 server.capability='owned_fixture_capability_12345678901234567890'
@@ -151,7 +164,36 @@ try:
     external=[v for v in observed if not v['native']]
     assert external[-1]['portable_summary_received'] and not external[-1]['opaque_received']
     assert external[-1]['bytes'] < observed[1]['bytes']
-    print('PASS: installed backend accepted a settings-added model, compacted the same GLM thread, retained its model and ran a native terminal echo. Native auth/checkpoint stayed on the mocked trusted origin. No real provider/account/app used.')
+    # Native compaction must relay the actual checkpoint without another model
+    # request or a dependency on portable-summary generation/DPAPI storage.
+    native_scenario=True
+    def forbidden_summary(*args):raise AssertionError('Native compaction accessed the portable cache')
+    portable.save_summary=forbidden_summary
+    native_thread=call('thread/start',{'model':'gpt-6.1-sol','ephemeral':True,'cwd':str(scratch),
+        'approvalPolicy':'never','sandbox':'read-only','baseInstructions':'Owned native compaction fixture.'})['thread']['id']
+    call('turn/start',{'threadId':native_thread,'input':[{'type':'text','text':'Owned native conversation fixture.'}]})
+    assert completed()=='completed'
+    count=len(native_requests)
+    call('thread/compact/start',{'threadId':native_thread})
+    assert completed()=='completed',{'stage':'native manual','gateway_events':gateway_events,'runtime_errors':runtime_errors}
+    assert len(native_requests)==count+1 and len(native_wire)==1
+    call('turn/start',{'threadId':native_thread,'input':[{'type':'text','text':'Continue the native fixture.'}]})
+    assert completed()=='completed'
+    assert any(v.get('encrypted_content')=='owned-native-only-checkpoint' for v in native_requests[-1]['input'])
+    auto_thread=call('thread/start',{'model':'gpt-6.1-sol','ephemeral':True,'cwd':str(scratch),
+        'approvalPolicy':'never','sandbox':'read-only','baseInstructions':'Owned native auto-compaction fixture.',
+        'config':{'model_auto_compact_token_limit':4096}})['thread']['id']
+    native_long_reply=True
+    count=len(native_wire)
+    call('turn/start',{'threadId':auto_thread,'input':[{'type':'text','text':'Produce the owned long fixture.'}]})
+    assert completed()=='completed'
+    call('turn/start',{'threadId':auto_thread,'input':[{'type':'text','text':'Continue after the owned long fixture.'}]})
+    assert completed()=='completed',{'stage':'native auto','gateway_events':gateway_events,'runtime_errors':runtime_errors}
+    assert len(native_wire)>count,'Installed backend did not trigger native auto-compaction'
+    assert not failures
+    portable.save_summary=old_save
+    print('PASS: external compaction retained GLM/tool continuation; installed backend completed native manual and automatic compaction without portable-summary requests/cache access. Mocked inference only; no real account/app used.')
 finally:
     process.terminate();process.wait(timeout=15);server.shutdown();server.server_close()
     mixed.open_upstream,mixed.record,portable.CACHE=old_open,old_record,old_cache
+    portable.save_summary=old_save

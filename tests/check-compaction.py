@@ -58,6 +58,16 @@ with contextlib.nullcontext(str(scratch)) as directory:
         assert all('id' not in v for v in native['input'])
         assert native['input'][2]['call_id']=='fixture_call' and native['input'][3]['call_id']=='fixture_custom_call'
         assert dict(prepared.headers)['authorization']=='Bearer dummy-native-fixture'
+        # Native manual/automatic compaction keeps the ordinary streaming route;
+        # only external-model checkpoints require a portable summary/cache.
+        for model in ('gpt-6.1-sol','owned-native-model'):
+            native_core=GatewayCore('fixture_capability_12345678901234567890',12345,{model},lambda provider:'dummy-provider-fixture')
+            native_prepared,native_incoming,_=prepare_routed_request(native_core,core.prefix+'/backend-api/codex/responses',headers,
+                json.dumps({**payload,'model':model}).encode())
+            assert native_prepared.kind=='responses' and native_prepared.provider=='openai'
+            assert json.loads(native_prepared.body)['model']==native_incoming['model']==model
+            assert json.loads(native_prepared.body)['input'][-1]=={'type':'compaction_trigger'}
+            assert not any(k.lower()=='accept-encoding' and v=='identity' for k,v in native_prepared.headers)
         calls=[]
         def native_summary(url,headers,body):
             value=json.loads(body);calls.append(value)

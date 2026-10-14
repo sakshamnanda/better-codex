@@ -120,7 +120,7 @@ def prepare_routed_request(core, target, headers, body):
             headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
             body = json.dumps(incoming).encode()
     prepared = core.prepare('POST',target,headers,body)
-    if triggers:
+    if triggers and requested_model in EXTERNAL:
         headers_identity = [(k,v) for k,v in prepared.headers if k.lower() != 'accept-encoding']+[('Accept-Encoding','identity')]
         from dataclasses import replace
         prepared = replace(prepared,kind='compaction',headers=tuple(headers_identity))
