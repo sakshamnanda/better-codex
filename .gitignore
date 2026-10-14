@@ -1,0 +1,16 @@
+# Assembled deployment, encrypted keys, backups, vendor tools and scratch output
+.local/
+# Credential metadata must stay local if the key form is run from source.
+src/gateway/keys/
+__pycache__/
+*.pyc
+*.dpapi
+*.sqlite*
+*.db
+*.db-*
+*.log
+auth.json
+config.toml
+.codex/
+.env
+.env.*
