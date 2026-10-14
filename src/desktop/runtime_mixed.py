@@ -104,8 +104,8 @@ class MixedGateway(BaseHTTPRequestHandler):
 
     def log_message(self, *_args): pass
 
-    def fail(self, status, message):
-        payload = json.dumps({'error': {'code': 'replica_gateway_error', 'message': message}}).encode()
+    def fail(self, status, message, code='replica_gateway_error'):
+        payload = json.dumps({'error': {'code': code, 'message': message}}).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(payload)))
@@ -211,8 +211,11 @@ class MixedGateway(BaseHTTPRequestHandler):
                     self.relay(upstream, event)
         except urllib.error.HTTPError as error:
             safe_message = 'Selected provider rejected this request'
+            safe_code = 'replica_gateway_error'
             if event is not None and event.get('provider') != 'openai':
-                safe_message = external_adapter.public_relay_error(error.read(65537)) or safe_message
+                detail = external_adapter.public_relay_detail(error.read(65537))
+                if detail:
+                    safe_code, safe_message = detail
             if event is not None:
                 event['upstream_http_status'] = error.code
                 if event.get('provider') == 'openai' and error.code == 400:
@@ -224,9 +227,18 @@ class MixedGateway(BaseHTTPRequestHandler):
                         vocabulary.update('minimum maximum length size least most short long too more than exactly got but received it zero one two instead above below'.split())
                         event['native_validation_words'] = [word for word in re.findall(r'[a-z_]+',message.lower()) if word in vocabulary]
                         event['native_validation_small_counts'] = [int(number) for number in re.findall(r'\b\d{1,2}\b',message)]
+                        param = detail.get('param') if isinstance(detail,dict) else None
+                        match = re.fullmatch(r'input\[(\d{1,6})\]\.id',param) if isinstance(param,str) else None
+                        if match:
+                            index = int(match[1])
+                            event['native_invalid_id_index'] = index
+                            items = incoming.get('input',[])
+                            kind = items[index].get('type') if isinstance(items,list) and index < len(items) and isinstance(items[index],dict) else None
+                            if kind in {'message','reasoning','compaction','compaction_trigger','function_call','function_call_output','custom_tool_call','custom_tool_call_output','tool_search_call','tool_search_output','additional_tools'}:
+                                event['native_invalid_id_item_type'] = kind
                     except (ValueError,TypeError,AttributeError): pass
                 record(event)
-            if not streaming: self.fail(error.code if error.code in {400,401,402,403,404,422,429} else 502, safe_message)
+            if not streaming: self.fail(error.code if error.code in {400,401,402,403,404,422,429} else 502, safe_message, code=safe_code)
         except GatewayError as error:
             if event is None and error.status == 422:
                 try:

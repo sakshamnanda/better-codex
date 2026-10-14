@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
 import tomllib
@@ -27,6 +28,8 @@ AGENTS_MARKER = "CODEX_REAL_PROVIDER_TEST_AGENTS_OK"
 BLOCKED_MODELS = {}
 PUBLIC_RELAY_ERRORS = frozenset({
     'Provider rejected the request format',
+    'Provider rejected this request (HTTP 400); sanitized details were recorded',
+    'This chat exceeds the selected provider context window. Compact it with a model that can read the current history, then switch back.',
     'OpenCode Zen rejected the saved API key',
     'OpenCode Zen requires credits',
     'OpenCode Zen denied access to this model or client',
@@ -44,16 +47,58 @@ PUBLIC_RELAY_ERRORS = frozenset({
 })
 
 
-def public_relay_error(body):
+def provider_error_diagnostic(body):
+    """Retain fixed error vocabulary only; never persist an upstream body."""
+    result = {'body_truncated': len(body) > 65536}
+    if result['body_truncated']:
+        return result
+    try:
+        value = json.loads(body)
+    except (ValueError, UnicodeError):
+        return result
+    codes = set('invalid_api_key authentication_error invalid_request_error validation_error bad_request context_length_exceeded context_window_exceeded max_tokens_exceeded prompt_too_long input_too_long string_above_max_length too_many_messages too_many_tools tool_call_limit_exceeded max_tool_calls_exceeded unsupported_parameter unsupported_params invalid_parameter vendor_restrictions_unavailable vendor_unavailable zdr_vendor_unavailable vendor_access_required model_not_allowed model_not_found model_required insufficient_credits insufficient_balance budget_exceeded rate_limit_exceeded output_budget_exhausted blocked_by_policy'.split())
+    params = set('model input messages tools tool_choice parallel_tool_calls reasoning reasoning.effort max_output_tokens max_tokens stream store instructions temperature top_p text text.format response_format service_tier'.split())
+    words = set('invalid unknown unsupported missing required unavailable rejected exceeded exceeds maximum minimum limit length size context window input output token tokens prompt messages message tools tool tool_choice call calls function schema parameters parameter arguments reasoning effort budget exhausted insufficient credits credit balance vendor vendors restrictions restriction region regions eligible eligible_vendor model models access policy policies blocked authentication key api format text json string array object content must should supported supports support found corresponding empty many too long short large character characters count request requests all failed failure unable'.split())
+    found_codes, found_params, found_words, counts = set(), set(), set(), set()
+    stack, visited = [value], 0
+    while stack and visited < 64:
+        entry = stack.pop(); visited += 1
+        if isinstance(entry, list):
+            stack.extend(entry[:16])
+        elif isinstance(entry, dict):
+            for field in ('code', 'type'):
+                code = entry.get(field)
+                if isinstance(code, str) and code in codes: found_codes.add(code)
+            param = entry.get('param')
+            if isinstance(param, str) and param in params: found_params.add(param)
+            message = entry.get('message')
+            if isinstance(message, str):
+                message = message[:8192].lower()
+                found_words.update(word for word in re.findall(r'[a-z_]+', message) if word in words)
+                counts.update(int(number) for number in re.findall(r'\b(\d{1,7})\s+(?:tokens|messages|tools|items|characters)\b', message))
+            # Do not walk arbitrary data, request echoes or account metadata.
+            stack.extend(entry[k] for k in ('error', 'errors', 'detail', 'details') if isinstance(entry.get(k), (dict, list)))
+    result.update(codes=sorted(found_codes), parameters=sorted(found_params),
+                  validation_words=sorted(found_words), size_counts=sorted(counts)[:16])
+    return result
+
+
+def public_relay_detail(body):
     """Only our fixed diagnostic strings may cross the inner relay boundary."""
     if len(body) > 65536: return None
     try:
         value = json.loads(body).get('error', {})
         message = value.get('message')
-        if value.get('code') == 'provider_test_error' and isinstance(message, str) and message in PUBLIC_RELAY_ERRORS:
-            return message
+        code = value.get('code')
+        if code in {'provider_test_error', 'context_length_exceeded'} and isinstance(message, str) and message in PUBLIC_RELAY_ERRORS:
+            return code, message
     except (ValueError, AttributeError, TypeError): pass
     return None
+
+
+def public_relay_error(body):
+    detail = public_relay_detail(body)
+    return detail[1] if detail else None
 
 
 def key_supplier(provider):
@@ -157,9 +202,9 @@ class RelayBase(BaseHTTPRequestHandler):
         self.close_connection = True
 
 class RealGateway(RelayBase):
-    def error_response(self, status, message, streaming=False):
+    def error_response(self, status, message, streaming=False, code='provider_test_error'):
         # Controlled error text only: never relay provider error bodies or headers.
-        error = {"code": "provider_test_error", "message": message}
+        error = {"code": code, "message": message}
         body = (("data: " + json.dumps({"type": "error", **error}) + "\n\n").encode()
                 if streaming else json.dumps({"error": error}).encode())
         if not streaming:
@@ -206,6 +251,8 @@ class RealGateway(RelayBase):
             prepared = replace(prepared, body=body)
             event = {"model": outgoing["model"], "provider": prepared.provider,
                      "reasoning_effort": outgoing.get("reasoning", {}).get("effort"),
+                     "request_bytes": len(prepared.body),
+                     "input_items": len(outgoing['input']), "tools_declared": len(outgoing['tools']),
                      "request_sent": True, "response_completed": False,
                      "agents_marker_received": AGENTS_MARKER in json.dumps(outgoing),
                      "tool_output_received": any(item.get("type") == "function_call_output" for item in outgoing["input"]),
@@ -257,13 +304,19 @@ class RealGateway(RelayBase):
                     raise GatewayError("Provider stream ended without completing", 502)
             self.close_connection = True
         except urllib.error.HTTPError as error:
+            diagnostic = provider_error_diagnostic(error.read(65537))
             if event is not None:
                 event["http_status"] = error.code
+                event['provider_error'] = diagnostic
             status = error.code if error.code in {400, 401, 402, 403, 404, 408, 422, 429} else 502
-            message = {400: 'Provider rejected the request format', 401: "Provider API key was rejected", 402: "Provider credits are required",
+            message = {400: 'Provider rejected this request (HTTP 400); sanitized details were recorded', 401: "Provider API key was rejected", 402: "Provider credits are required",
                        403: "Provider denied access to this model", 404: "Provider model or endpoint was unavailable",
                        429: "Provider rate limit reached"}.get(status, "Provider rejected the test request")
-            self.error_response(status, message, streaming)
+            code = 'provider_test_error'
+            if error.code == 400 and 'context_length_exceeded' in diagnostic.get('codes', []):
+                code = 'context_length_exceeded'
+                message = 'This chat exceeds the selected provider context window. Compact it with a model that can read the current history, then switch back.'
+            self.error_response(status, message, streaming, code=code)
         except GatewayError as error:
             if event is not None:
                 event["gateway_error"] = str(error)

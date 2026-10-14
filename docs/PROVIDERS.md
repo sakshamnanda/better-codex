@@ -127,3 +127,7 @@ The `opencode` adapter is restricted to the genuine OpenCode Zen client. It keep
 Add a small adapter under `src/gateway/` and connect it in `provider_relay.py`; extend registry validation for that specific protocol. OAuth or extra required headers need explicit, verified implementation. Never bypass validation or forward native account headers. Keep desktop launch/rollback and UI code independent of provider protocol details.
 
 Changing the configuration prepares the next launch; this project does not hot-reload a running service. Switching among configured providers/models in chats needs no restart.
+
+## Context-limit errors and compaction
+
+An authenticated Merge GLM request can fail with `context_length_exceeded` even when the model catalogue advertises a larger window. Treat the serving request's rejection as authoritative; changing keys or effort does not shorten the history. The gateway preserves that known error code through both relays and records only bounded, fixed diagnostic vocabulary, parameter names and size counts. It never stores the raw upstream error body.
