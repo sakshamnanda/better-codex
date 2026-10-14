@@ -5,7 +5,9 @@
     "endpoint": "https://openrouter.ai/api/v1/responses",
     "default_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
     "models": {
-      "nvidia/nemotron-3-ultra-550b-a55b:free": {"output_limit": 4096}
+      "nvidia/nemotron-3-ultra-550b-a55b:free": {
+        "output_limit": 4096
+      }
     }
   },
   "merge": {
@@ -14,7 +16,9 @@
     "endpoint": "https://api-gateway.merge.dev/v1/openai/responses",
     "default_model": "zai/glm-5.3-flash",
     "models": {
-      "zai/glm-5.3-flash": {"output_limit": 16384}
+      "zai/glm-5.3-flash": {
+        "output_limit": 16384
+      }
     }
   },
   "opencode": {
@@ -23,8 +27,13 @@
     "endpoint": "https://opencode.ai/zen/v1/chat/completions",
     "default_model": "space-bunny-free",
     "models": {
-      "step-5-preview-free": {"output_limit": 4096},
-      "space-bunny-free": {"output_limit": 4096, "send_variant": true}
+      "step-5-preview-free": {
+        "output_limit": 4096
+      },
+      "space-bunny-free": {
+        "output_limit": 4096,
+        "send_variant": true
+      }
     }
   }
 }

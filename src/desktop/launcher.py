@@ -100,7 +100,14 @@ def main():
         overlay = json.loads((ROOT / 'Provider-Overlay.json').read_text())
         source = (ROOT / 'Provider-Overlay.source.js').read_text(encoding='utf-8')
         if hashlib.sha256(source.encode()).hexdigest() != overlay['overlay_source_sha256']: raise RuntimeError('UI source verification failed')
-        ui_applied = pipe.patch(overlay['filename'],overlay['original_source_sha256'],source,SUPPORT / 'Live-Overlay-Check.json')
+        additional = []
+        for asset in overlay.get('additional_assets',[]):
+            text = (ROOT / asset['source_file']).read_text(encoding='utf-8')
+            if hashlib.sha256(text.encode()).hexdigest() != asset['overlay_source_sha256']: raise RuntimeError('Settings UI source verification failed')
+            additional.append((asset['filename'],asset['original_source_sha256'],text))
+        from api_settings import Settings
+        settings = Settings(ROOT)
+        ui_applied = pipe.patch(overlay['filename'],overlay['original_source_sha256'],source,SUPPORT / 'Live-Overlay-Check.json',additional,settings.handle)
         state = json.loads((SUPPORT / 'Gateway-State.json').read_text())
         state.update(app_pid=child.pid,mode='installed_signed_app',package_files_replaced=False)
         (SUPPORT / 'Gateway-State.json').write_text(json.dumps(state))

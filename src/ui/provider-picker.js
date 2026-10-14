@@ -54,6 +54,10 @@ function gatewayPickerMenuProps(props) {
     }, provider.id)),
     error ? (0, CU.jsx)(mh.Item, {disabled:true, subTextAllowWrap:true, children:error}) : null,
     (0, CU.jsx)(mh.Separator, {}),
+    (0, CU.jsx)(mh.Title, { children: `Better Codex` }),
+    ...[[`providers`,`Providers`],[`keys`,`API keys`],[`models`,`Models`]].map(([section,label]) =>
+      (0, CU.jsx)(mh.Item, {onSelect:() => { void globalThis.gatewaySettingsOpen(section); }, children:label}, `better-codex-` + section)),
+    (0, CU.jsx)(mh.Separator, {}),
   ] });
   return { ...props, menuHeader: header,
     modelListConfig: { ...menu,

@@ -18,6 +18,14 @@ Use the **Codex (Custom Providers)** desktop shortcut for provider support. The 
 
 For rollback, close Codex and run `scripts/Rollback.cmd`. Sign-in and chat databases are retained. Select a ChatGPT model before continuing an external-model chat through the ordinary launcher.
 
+Open **Settings → Better Codex** for **Providers**, **API keys** and **Models**. These sections are also available in the model menu. Edit compatible provider URLs/defaults, replace masked keys or add/edit external model IDs, token limits and effort metadata. Blank key fields keep the saved DPAPI-encrypted keys. ChatGPT sign-in and the verified OpenCode endpoint remain managed by their original clients.
+
+In **API keys**, each provider supports up to 16 named key profiles. The original key appears as **Default**. Use **Add Merge Gateway API key**, name the new profile and enter its key, then choose **Active API key**. Existing profiles remain stored; only the selected profile is used for that provider. Save and relaunch when ready to apply the selection. This is a provider-wide choice for all its models/chats, with no automatic key rotation or fallback.
+
+Better Codex uses the app's actual settings page, grouped rows, text inputs, rounded dropdown buttons and radio/checkbox menus. Theme colors and keyboard behavior come from those native components. The native scroll container holds the editor while the footer keeps Save accessible in short windows. In **Models**, choose a provider first: only its models appear; **Edit** reveals limits and effort options. **Add model** adds to that provider. Model-menu shortcuts navigate to this same Settings page. Unsaved edits use the app's original settings-change guard.
+
+**Save for next launch** validates the configuration and stages a fresh verified deployment. Close and reopen **Codex (Custom Providers)** when ready to apply it. The running service and chats keep their current configuration. Prior deployments and their encrypted keys/rollback state remain available; the next-launch predecessor is recorded in each new deployment's `support/Previous-Settings-Deployment.txt`. Editing metadata does not establish provider access or compatibility; use the provider's published limits and verify a new model before relying on it.
+
 Active deployment folders stay in place until their session closes, because their key suppliers and rollback state reference them. The launcher reads the ignored `.local/deployment-path.txt` selection for the next launch. Preparing a replacement does not change the running app or its settings.
 
 ## Model-wide instructions
@@ -47,6 +55,7 @@ API keys stay DPAPI-encrypted and local. Runtime data, logs, backups, profiles, 
 ```powershell
 python scripts/build-deployment.py
 python tests/check-overlay-cache.py
+python tests/check-api-settings.py
 python tests/check-rollback.py
 python tests/check-provider-registry.py
 python tests/check-model-profiles.py
@@ -57,6 +66,7 @@ python tests/check-retired-tool-history.py
 python tests/check-cross-chat-context.py
 python tests/check-native-client-tools.py
 node tests/check-picker.cjs
+node tests/check-settings-layout.cjs
 python scripts/build-deployment.py --check
 ```
 

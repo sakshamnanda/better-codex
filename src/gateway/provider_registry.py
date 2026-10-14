@@ -6,8 +6,8 @@ from urllib.parse import urlsplit
 
 
 def load_registry(directory):
-    providers = json.loads((directory / 'providers.json').read_text())
-    catalog = json.loads((directory / 'models.json').read_text())['models']
+    providers = json.loads((directory / 'providers.json').read_text(encoding='utf-8'))
+    catalog = json.loads((directory / 'models.json').read_text(encoding='utf-8'))['models']
     metadata = {model['slug']: model for model in catalog}
     if len(metadata) != len(catalog) or not isinstance(providers, dict) or not providers:
         raise ValueError('Duplicate catalog IDs or invalid provider registry')

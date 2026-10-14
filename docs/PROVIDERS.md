@@ -2,6 +2,24 @@
 
 `config/providers.json` is the shared routing registry. The gateway, picker categories, provider defaults, credential form and OpenCode engine use it. `config/models.json` holds the desktop catalog, including each model's context limit, supported efforts and default effort. Keep provider secrets out of both files.
 
+## Edit settings inside the app
+
+Open **Settings → Better Codex**, or the **Better Codex** section of the model menu:
+
+- **Providers:** edit an existing compatible provider's HTTPS API URL and default model. Changing destinations requires confirmation because that provider's key will go to the new URL. Protocols are shown, not silently changed. ChatGPT authentication and the genuine OpenCode client's endpoint are fixed.
+- **API keys:** store up to 16 named profiles per provider and choose **Active API key**. Existing single keys appear as **Default** and remain encrypted without migration/re-encryption. Use **Add [provider] API key** to enter another key and give it a distinct name. Saved values appear as `********`; leave replacements blank to retain them. New unsaved rows can be discarded, while stored profiles are retained. Plaintext is never read back into the page, written to source configuration or passed on a command line. The private renderer pipe sends new values to a local Windows DPAPI encryption process over standard input.
+- **Models:** add a model to a configured provider or edit its display name, context/output limits, supported efforts and default effort. Existing model IDs/provider assignments remain fixed to preserve chats and profile mappings. New models inherit the shared instruction profile unless separately mapped. Enter only capabilities verified by the provider; these options do not check remote access or invent effort support.
+
+These sections render with the actual native settings page, grouped rows, text fields and dropdown/radio/checkbox menu components. They inherit app themes and keyboard/focus behavior. The native page scrolls its editor content separately from its Save footer, and the original unsaved-settings guard protects navigation. The required native control modules are checked against exact source hashes before import; unknown builds are refused.
+
+**Models** has a provider selector and a heading showing ownership; only that provider's models appear below it. Each row shows its exact API ID; **Edit** reveals its capability fields. The add button is scoped to that provider. For example, the configured `zai/glm-5.3-flash` belongs to **Merge Gateway**; it is not listed under OpenRouter unless a separate compatible OpenRouter model route is registered.
+
+**Save for next launch** uses the same registry/instruction and exact-build hash checks as the launcher. It updates the public source registry/catalog and prepares a new ignored deployment with encrypted keys copied from the currently selected setup. Keys are replaced only in that new folder. Failed saves retain the previous selection and restore this save's source edits; an already-running deployment is never rebuilt or removed. Close and reopen through the custom launcher to apply a saved change. Provider/model switching after launch still needs no restart.
+
+For two Merge Gateway accounts, keep the original key under **Default** (or rename it), add a second named key, and select the desired account in **Active API key**. Save and relaunch to apply it. This selection is provider-wide, so all Merge models/chats use that chosen key; it is not a per-chat key override or automatic retry/rotation. Other providers keep their own selection. The private ignored `gateway/keys/Profiles.json` stores profile IDs/names and the active ID, never key values. Each slot has its own DPAPI-encrypted file; default slots retain the original filenames for compatibility. The legacy key-setup form replaces the provider's currently active slot. Previous deployments retain their full key/profile snapshot for rollback.
+
+The native settings sidebar module is customized in memory only after its exact source hash matches. No signed package file is changed. Only the owned app renderer's default `app://-` context can invoke the bounded settings actions; plugin/browser frames cannot invoke them. Rollback deployments remain local, and `support/Previous-Settings-Deployment.txt` records each staged setup's predecessor. No live inference or app restart is performed by the settings editor itself.
+
 ## Add a model to an existing provider
 
 1. Add its catalog metadata to `config/models.json`, using a compatible existing entry as the starting point. Set the actual model ID, label, context limit and supported/default efforts. Do not invent effort support.
