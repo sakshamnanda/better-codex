@@ -13,6 +13,8 @@ from provider_relay import public_relay_error
 class FixtureEngine(OpenCodeEngine):
     def __init__(self, mode='relay'):
         self.mode = mode
+        # Fixture capabilities are independent of private model customization.
+        self.models={'space-bunny-free':{'send_variant':True,'metadata':{'supported_reasoning_levels':[{'effort':'high'}]}}}
         self.caller_tools = mode != 'disabled'
         self.tool_ids = ['codex_request', 'bash', 'read', 'write', 'edit', 'task', 'question', 'webfetch', 'glob', 'grep', 'skill']
         self.prompt = None

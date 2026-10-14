@@ -23,4 +23,13 @@
       zo.dispatchHostMessage({type:`navigate-to-route`,path:`/settings/general`});
     }
   };
+  // A renderer reload reads the saved public registry again. Secrets are never
+  // included in this snapshot; the native model-selection state is preserved.
+  if (typeof globalThis.betterCodexSettings === `function`) {
+    globalThis.gatewaySettingsRequest({action:`get`}).then(snapshot=>{
+      globalThis.gatewayUpdateProviderConfig?.({providers:[{id:`openai`,label:`ChatGPT`},
+        ...Object.entries(snapshot.providers).map(([id,p])=>({id,label:p.label,defaultModel:p.default_model}))],
+        models:Object.fromEntries(snapshot.models.map(m=>[m.id,m.provider]))});
+    }).catch(()=>{});
+  }
 })();

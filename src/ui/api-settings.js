@@ -98,6 +98,7 @@
       let body=requestBody(snapshot,draft);
       try {
         const result=await globalThis.gatewaySettingsRequest(body);
+        if(result.live_applied)globalThis.gatewayUpdateProviderConfig?.(result.provider_config);
         clearKeys(latest.current);setSnapshot(result.settings);setDraft(makeDraft(result.settings));
         setDirty(false);setStatus(result.message);
       } catch(error){setFailed(true);setStatus(error.message)}
@@ -106,11 +107,22 @@
         setDraft(previous=>{const next=structuredClone(previous);clearKeys(next);return next});setBusy(false);
       }
     }
+    async function applyLive() {
+      if(busy||dirty||!snapshot?.live_supported)return;
+      setBusy(true);setStatus(`Applying verified settings between requests…`);setFailed(false);
+      try {
+        const result=await globalThis.gatewaySettingsRequest({action:`apply_live`,revision:snapshot.revision});
+        if(result.live_applied)globalThis.gatewayUpdateProviderConfig?.(result.provider_config);
+        setSnapshot(result.settings);setDraft(makeDraft(result.settings));setStatus(result.message);
+      } catch(error){setStatus(error.message);setFailed(true)}
+      finally {setBusy(false)}
+    }
     const footer=e(li.Fragment,null,
       e(`div`,{role:`status`,className:`min-w-0 flex-1 text-sm `+(failed?`text-danger`:`text-secondary`)},status),
       dirty?button(`Discard changes`,()=>{clearKeys(latest.current);setDraft(makeDraft(snapshot));setDirty(false);setStatus(``);setFailed(false)}):null,
       onClose?button(`Back`,onClose):null,
-      e(GatewayButton,{size:`toolbar`,color:`primary`,loading:busy,disabled:busy||!dirty,onClick:()=>save()},`Save for next launch`));
+      snapshot?.live_supported?button(`Apply live`,applyLive,busy||dirty):null,
+      e(GatewayButton,{size:`toolbar`,color:`primary`,loading:busy,disabled:busy||!dirty,onClick:()=>save()},snapshot?.live_supported?`Save and apply`:`Save for next launch`));
     let content=e(`p`,{className:`text-sm text-secondary`},failed?`Could not load local settings.`:`Loading local settings…`);
     if(draft&&section===`providers`)content=Object.entries(draft.providers).map(([id,p])=>e(Section,{key:id,title:p.label},
       e(Field,{label:`API URL`,value:p.endpoint,type:`url`,readOnly:p.adapter===`opencode`,disabled:busy,
@@ -126,7 +138,7 @@
         edit(next=>{next.keys[id].profiles.push({id:profileId,label:`Key ${entry.profiles.length+1}`,key:``,saved:false,existing:false,previousActive:entry.active});next.keys[id].active=profileId});
         setExpanded(previous=>({...previous,[profileId]:true}));
       })},menuRow(`Active API key`,entry.profiles.map(k=>({value:k.id,label:k.label||`Unnamed key`})),entry.active,
-        value=>edit(next=>{next.keys[id].active=value}),`The selected profile is used after relaunch.`),
+        value=>edit(next=>{next.keys[id].active=value}),snapshot.live_supported?`The selected profile is used by new requests after Save and apply.`:`This running helper applies the selected profile after relaunch.`),
         ...entry.profiles.flatMap(profile=>[
           e(GatewayRow,{key:profile.id,label:profile.label||`Unnamed key`,description:profile.saved?`Saved: ********`:`New key`,
             control:button(expanded[profile.id]?`Done`:`Edit`,()=>toggle(profile.id))}),
@@ -191,7 +203,7 @@
     const confirmation=e(GatewayDialog,{open:confirmEndpoint,size:`compact`,onOpenChange:setConfirmEndpoint},
       e(GatewayDialogContent,null,e(GatewayDialogHeader,null,e(GatewayDialogHeading,{
         title:e(GatewayDialogTitle,null,`Save provider URL changes?`),
-        subtitle:e(GatewayDialogSubtitle,null,`The selected provider key will be sent to the new API address after relaunch.`)})),
+        subtitle:e(GatewayDialogSubtitle,null,snapshot?.live_supported?`The selected provider key will be sent to the new API address after Save and apply.`:`The selected provider key will be sent to the new API address after relaunch.`)})),
         e(GatewayDialogFooter,null,button(`Cancel`,()=>setConfirmEndpoint(false)),
           e(GatewayButton,{size:`toolbar`,color:`primary`,onClick:()=>save(true)},`Save changes`))));
     return e(li.Fragment,null,e(GatewaySettingsPage,{title:labels[section]??labels.providers,subtitle:`Better Codex`,footer,scrollResetKey:section},content),confirmation);

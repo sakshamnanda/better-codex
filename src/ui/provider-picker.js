@@ -1,3 +1,9 @@
+// Updating this registry preserves the native model-selection callbacks and
+// per-chat state. Native catalog additions still need their own backend refresh.
+globalThis.gatewayUpdateProviderConfig = value => {
+  gatewayProviderConfig.providers=value.providers;
+  gatewayProviderConfig.models=value.models;
+};
 function gatewayPickerOptionProvider(option) {
   const id = option.id ?? ``;
   for (const model of Object.keys(gatewayProviderConfig.models).sort((a, b) => b.length - a.length)) {

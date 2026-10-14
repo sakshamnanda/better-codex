@@ -22,7 +22,12 @@ assert prepared.url == 'https://api-gateway.merge.dev/v1/openai/responses'
 assert dict(prepared.headers)['Authorization'] == 'Bearer merge-fixture-key'
 assert not any(name.lower() == 'chatgpt-account-id' for name, _ in prepared.headers)
 forwarded = json.loads(prepared.body)
-assert forwarded['reasoning']['effort'] == 'max' and 'Merge Gateway' in forwarded['instructions']
+if core.MODELS['zai/glm-5.3-flash'].get('reasoning_mode')=='provider_default':
+    assert 'reasoning' not in forwarded
+else:
+    allowed=core.EXTERNAL['zai/glm-5.3-flash'][3]
+    assert forwarded['reasoning']['effort']==('max' if 'max' in allowed else core.EXTERNAL['zai/glm-5.3-flash'][2])
+assert 'Merge Gateway' in forwarded['instructions']
 assert 'native-private-fixture' not in prepared.body.decode()
 wire_name = forwarded['tools'][0]['name']
 call = {'type': 'function_call', 'name': wire_name, 'call_id': 'fixture-call', 'arguments': '{"cmd":"Write-Output fixture"}'}
@@ -38,7 +43,8 @@ directory.mkdir(parents=True)
 providers = json.loads((root / 'config/providers.json').read_text())
 catalog = json.loads((root / 'config/models.json').read_text())
 model = copy.deepcopy(next(model for model in catalog['models'] if model['slug'] == 'nvidia/nemotron-3-ultra-550b-a55b:free'))
-model.update(slug='fixture/text-model', display_name='Fixture Text Model')
+model.update(slug='fixture/text-model', display_name='Fixture Text Model',default_reasoning_level='high',
+    supported_reasoning_levels=[{'effort':'high','description':'Owned high-effort fixture'}])
 catalog['models'].append(model)
 providers['fixture'] = {'label': 'Fixture Provider', 'adapter': 'responses', 'endpoint': 'https://provider.example/v1/responses', 'default_model': model['slug'], 'models': {model['slug']: {'output_limit': 2048}}}
 (directory / 'models.json').write_text(json.dumps(catalog))

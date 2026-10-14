@@ -143,12 +143,13 @@ def prepare_configuration(request, providers, catalog):
 
 
 class Settings:
-    def __init__(self, deployment):
+    def __init__(self, deployment, live_apply=None):
         self.deployment = Path(deployment).resolve()
         self.project = self.deployment.parent.parent
         if self.deployment.parent.name != '.local' or not (self.project / 'scripts/build-deployment.py').is_file():
             raise ValueError('Settings require a managed project deployment.')
         self.lock = threading.Lock()
+        self.live_apply=live_apply
 
     def selected(self):
         path = (self.project / (self.project / '.local/deployment-path.txt').read_text().strip()).resolve()
@@ -170,7 +171,7 @@ class Settings:
                 if p['saved']:
                     name = pid + ('' if p['id']=='default' else '--' + p['id']) + '.dpapi'
                     revision.update(hashlib.sha256((key_folder / name).read_bytes()).digest())
-        return {'revision':revision.hexdigest(),
+        return {'revision':revision.hexdigest(),'live_supported':bool(getattr(self,'live_apply',None)),
             'providers':{pid:{'label':p['label'],'adapter':p['adapter'],'endpoint':p['endpoint'],
                 'default_model':p['default_model'],'saved_key':any(profile['id']==profiles[pid]['active'] and profile['saved'] for profile in profiles[pid]['profiles']),
                 'credential_profiles':profiles[pid]} for pid,p in providers.items()},
@@ -249,6 +250,11 @@ class Settings:
     def handle(self, request):
         if not isinstance(request, dict): raise ValueError('Invalid settings request.')
         if request == {'action':'get'}: return self.snapshot()
+        if set(request)=={'action','revision'} and request['action']=='apply_live':
+            with self.lock:
+                if request['revision']!=self.snapshot()['revision']:raise ValueError('Settings changed; reopen the page before applying.')
+                if not getattr(self,'live_apply',None):raise ValueError('This running helper does not support live apply. No process was restarted.')
+                return self.apply_selected()
         if set(request)=={'action','revision','provider','model'} and request['action']=='metadata':
             with self.lock:
                 current=self.snapshot()
@@ -301,8 +307,22 @@ class Settings:
                 for name,data in originals.items():
                     if (folder / name).read_bytes() == written.get(name): (folder / name).write_bytes(data)
                 raise
-            return {'message':'Saved for the next launch. Close and reopen Codex (Custom Providers) when ready; the running chats are unchanged.',
-                    'settings':self.snapshot()}
+            if getattr(self,'live_apply',None):
+                try:return self.apply_selected()
+                except (ValueError,OSError,RuntimeError):
+                    return {'message':'Saved, but live apply did not pass. The previous running setup was retained. Retry Apply live when requests are idle.',
+                        'settings':self.snapshot(),'live_applied':False}
+            return {'message':'Saved for the next launch. This running helper has no live-apply hook; the running chats are unchanged.',
+                'settings':self.snapshot(),'live_applied':False}
+
+    def apply_selected(self):
+        result=self.live_apply(self.selected())
+        snapshot=self.snapshot()
+        return {**result,'settings':snapshot,'live_applied':True,
+            'provider_config':{'providers':[{'id':'openai','label':'ChatGPT'}]+[
+                {'id':pid,'label':p['label'],'defaultModel':p['default_model']} for pid,p in snapshot['providers'].items()],
+                'models':{row['id']:row['provider'] for row in snapshot['models']}},
+            'message':'Keys, URLs and routing applied live. Model catalog changes are pending a backend catalog refresh.' if result['catalog_pending'] else 'Settings applied live; no app or window restart.'}
 
     def validate(self,providers,catalog,folder):
         from provider_registry import load_registry

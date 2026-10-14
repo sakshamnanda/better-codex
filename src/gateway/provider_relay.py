@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import importlib.util
 import json
 import os
@@ -20,6 +21,7 @@ from opencode_engine import OpenCodeEngine
 from provider_registry import PROVIDERS, MODELS
 
 HERE = Path(__file__).resolve().parent
+KEY_STORAGE=HERE
 SUPPORT = HERE.parent / "support"
 LOCK = threading.Lock()
 EVENTS = []
@@ -112,7 +114,7 @@ def key_supplier(provider):
     powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-         str(HERE / "Provider-Credentials.ps1"), "-Mode", "Token", "-Provider", provider],
+         str(HERE / "Provider-Credentials.ps1"), "-Mode", "Token", "-Provider", provider,'-Storage',str(KEY_STORAGE)],
         capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW,
     )
     if result.returncode:
@@ -225,6 +227,13 @@ class RealGateway(RelayBase):
         self.close_connection = True
 
     def do_POST(self):
+        prefix=getattr(self.server,'prefix',None)
+        if prefix and self.path!=prefix+'/backend-api/codex/responses':
+            self.fail(404);return
+        gate=getattr(self.server,'reload_gate',None)
+        with gate.request(continuation=True) if gate else nullcontext():RealGateway._post(self)
+
+    def _post(self):
         if not self.allowed() or self.path != self.server.prefix + "/backend-api/codex/responses":
             self.fail(403)
             return

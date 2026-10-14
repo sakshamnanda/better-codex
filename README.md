@@ -31,7 +31,9 @@ In **API keys**, each provider supports up to 16 named key profiles. The origina
 
 Better Codex uses the app's actual settings page, grouped rows, text inputs, rounded dropdown buttons and radio/checkbox menus. Theme colors and keyboard behavior come from those native components. The native scroll container holds the editor while the footer keeps Save accessible in short windows. In **Models**, choose a provider first: only its models appear; **Edit** reveals limits and effort options. **Add model** adds to that provider. Model-menu shortcuts navigate to this same Settings page. Unsaved edits use the app's original settings-change guard.
 
-**Save for next launch** validates the configuration and stages a fresh verified deployment. Close and reopen **Codex (Custom Providers)** when ready to apply it. The running service and chats keep their current configuration. Prior deployments and their encrypted keys/rollback state remain available; the next-launch predecessor is recorded in each new deployment's `support/Previous-Settings-Deployment.txt`. Editing metadata does not establish provider access or compatibility; use the provider's published limits and verify a new model before relying on it.
+The live-enabled helper shows **Save and apply**. It stages a verified, immutable replacement and switches keys, URLs, routing and instruction snapshots between requests without restarting the app or cancelling streams. OpenCode credential/model changes prepare a separately isolated inference engine before switching it; the old engine closes only after its requests finish. **Apply live** retries a pending change if requests could not drain within 30 seconds. Prior deployments and their encrypted keys/rollback state remain available.
+
+This build caches its native model catalog. New models or changed capabilities remain marked pending a backend catalog refresh; live routing alone does not refresh the native picker. **Reload Window** reloads web content and is separate from restarting the backend. The helper does not restart that backend automatically. An older running helper without the live hook still shows **Save for next launch**; reloading the renderer cannot upgrade its Python code. Code/build changes are refused by live apply and retain the previous running setup. Editing metadata does not establish provider access or compatibility.
 
 Active deployment folders stay in place until their session closes, because their key suppliers and rollback state reference them. The launcher reads the ignored `.local/deployment-path.txt` selection for the next launch. Preparing a replacement does not change the running app or its settings.
 
@@ -66,6 +68,7 @@ python scripts/build-deployment.py
 python tests/check-overlay-cache.py
 python tests/check-api-settings.py
 python tests/check-model-metadata.py
+python tests/check-live-settings.py
 python tests/check-rollback.py
 python tests/check-provider-registry.py
 python tests/check-model-profiles.py

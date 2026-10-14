@@ -2,6 +2,7 @@
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+from contextlib import nullcontext
 import hashlib
 import importlib.util
 import argparse
@@ -165,6 +166,10 @@ class MixedGateway(BaseHTTPRequestHandler):
             record(event)
 
     def do_GET(self):
+        gate=getattr(self.server,'reload_gate',None)
+        with gate.request() if gate else nullcontext():MixedGateway._get(self)
+
+    def _get(self):
         try:
             prepared = self.core().prepare('GET', self.path, list(self.headers.items()))
             if prepared.kind != 'models': raise GatewayError('Unsupported replica gateway endpoint', 404)
@@ -194,6 +199,10 @@ class MixedGateway(BaseHTTPRequestHandler):
         except (OSError, ValueError, KeyError): self.fail(502, 'Model metadata could not be loaded')
 
     def do_POST(self):
+        gate=getattr(self.server,'reload_gate',None)
+        with gate.request() if gate else nullcontext():MixedGateway._post(self)
+
+    def _post(self):
         streaming = False
         event = None
         try:

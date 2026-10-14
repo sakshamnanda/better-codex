@@ -21,14 +21,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class OpenCodeEngine:
-    def __init__(self, key_supplier):
+    def __init__(self, key_supplier, root=None, registry=None):
         self.key_supplier = key_supplier
+        self.root=Path(root) if root is not None else ROOT
+        self.providers,self.models=registry if registry is not None else (PROVIDERS,MODELS)
         self.process = None
-        self.directory = ROOT / "support/opencode-runtime"
+        self.directory = self.root / "support/opencode-runtime"
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def start(self, mock_url=None, caller_tools=False):
-        exe = ROOT / "opencode-engine/opencode.exe"
+        exe = self.root / "opencode-engine/opencode.exe"
         manifest = json.loads((exe.parent / "Verification.json").read_text())
         assert hashlib.sha256(exe.read_bytes()).hexdigest() == manifest["executable_sha256"]
         self.directory.mkdir(exist_ok=True)
@@ -41,11 +43,11 @@ class OpenCodeEngine:
             environment[variable] = str(self.directory / name)
         password = secrets.token_urlsafe(32)
         self.auth = "Basic " + base64.b64encode(("opencode:" + password).encode()).decode()
-        default = PROVIDERS["opencode"]["default_model"]
+        default = self.providers["opencode"]["default_model"]
         config = {"model": "opencode/" + default, "small_model": "opencode/" + default, "enabled_providers": ["opencode"], "autoupdate": False,
                   "snapshot": False, "share": "disabled", "compaction": {"auto": False, "prune": False}, "permission": {"*": "deny"}, "mcp": {}, "plugin": [],
                   "agent": {"build": {"permission": {"*": "deny"}}, "inference": {"mode": "primary", "description": "Inference only; Codex executes tools", "permission": {"*": "deny"}, "prompt": "Follow the supplied system instructions. Native OpenCode tools are disabled. Represent requested caller tools only in the exact response format specified by the caller."}},
-                  "provider": {"opencode": {"options": {"apiKey": "{env:CODEX_TEST_OPENCODE_KEY}"}, "models": {model_id: {"name": model["metadata"]["display_name"], "limit": {"context": model["metadata"]["context_window"], "output": model["output_limit"]}} for model_id, model in MODELS.items() if model["provider"] == "opencode"}}}}
+                  "provider": {"opencode": {"options": {"apiKey": "{env:CODEX_TEST_OPENCODE_KEY}"}, "models": {model_id: {"name": model["metadata"]["display_name"], "limit": {"context": model["metadata"]["context_window"], "output": model["output_limit"]}} for model_id, model in self.models.items() if model["provider"] == "opencode"}}}}
         if mock_url is not None:
             assert mock_url.startswith("http://127.0.0.1:")
             config["provider"]["opencode"]["options"]["baseURL"] = mock_url
@@ -59,7 +61,7 @@ class OpenCodeEngine:
             plugins = dependencies / "plugins"
             plugins.mkdir(exist_ok=True)
             plugin = plugins / "codex-relay.ts"
-            plugin.write_text((ROOT / "gateway/codex-relay.ts").read_text(encoding="utf-8"), encoding="utf-8")
+            plugin.write_text((self.root / "gateway/codex-relay.ts").read_text(encoding="utf-8"), encoding="utf-8")
             config["plugin"] = [plugin.as_uri()]
             (dependencies / "package.json").write_text(json.dumps({"dependencies": {"@opencode-ai/plugin": "1.18.35"}}))
             environment["BUN_INSTALL_CACHE_DIR"] = str(self.directory / "cache/bun")
@@ -132,9 +134,10 @@ class OpenCodeEngine:
             "system": system,
             "parts": [{"type": "text", "text": "Caller conversation history (JSON):\n" + json.dumps(payload["input"])}],
         }
-        if MODELS[payload["model"]].get("send_variant", False):
+        models=getattr(self,'models',MODELS)
+        if models[payload["model"]].get("send_variant", False):
             effort = payload.get("reasoning", {}).get("effort", "medium")
-            if effort not in {level["effort"] for level in MODELS[payload["model"]]["metadata"]["supported_reasoning_levels"]}:
+            if effort not in {level["effort"] for level in models[payload["model"]]["metadata"]["supported_reasoning_levels"]}:
                 raise GatewayError("Unsupported OpenCode effort variant", 422)
             body["variant"] = effort
         # Hide native tools as well as denying them. Codex owns all execution.
