@@ -33,7 +33,8 @@ metadata={m['slug']:m for m in catalog['models']}
 rows=[{'id':mid,'provider':pid,'label':metadata[mid]['display_name'],'context':metadata[mid]['context_window'],
     'output':route.get('output_limit',4096),'efforts':[e['effort'] for e in metadata[mid]['supported_reasoning_levels']],
     'default_effort':metadata[mid]['default_reasoning_level']} for pid,p in PROVIDERS.items() for mid,route in p['models'].items()]
-added={**next(r for r in rows if r['provider']=='merge'),'id':'fixture/new-model','label':'Owned new-model fixture'}
+added={**next(r for r in rows if r['provider']=='openrouter'),'id':'@preset/runtime-fixture','label':'Owned preset fixture',
+    'metadata_mode':'provider','reasoning_mode':'provider_default','efforts':['none'],'default_effort':'none'}
 _,catalog=prepare_configuration({'providers':{pid:{'endpoint':p['endpoint'],'default_model':p['default_model']} for pid,p in PROVIDERS.items()},
     'models':rows+[added]},PROVIDERS,catalog)
 (home/'models.json').write_text(json.dumps(catalog))

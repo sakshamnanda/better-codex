@@ -109,6 +109,9 @@ with tempfile.TemporaryDirectory(dir=root / '.local',prefix='settings-check-') a
     assert result.returncode == 0 and (gateway / 'keys/merge.dpapi').read_bytes() == default_merge
     result = subprocess.run(cmd+['-Mode','Token','-Provider','merge'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
     assert result.returncode == 0 and result.stdout == 'dummy-merge-only'
+    result = subprocess.run(cmd+['-Mode','Token','-Provider','merge','-Profile','secondary','-Storage',str(gateway)],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
+    assert result.returncode==0 and result.stdout==second
+    assert credential_profiles(gateway/'keys',providers)['merge']['active']=='default'
     # Selection is provider-scoped, never a fallback to another provider's key.
     result = subprocess.run(cmd+['-Mode','Token','-Provider','openrouter'],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
     assert result.returncode == 0 and result.stdout == fixture

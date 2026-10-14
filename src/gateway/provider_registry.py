@@ -32,8 +32,10 @@ def load_registry(directory):
         for model_id, settings in provider['models'].items():
             if model_id in models or model_id not in metadata:
                 raise ValueError('Model must have unique routing and catalog metadata')
-            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant'}:
+            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant','metadata_mode','reasoning_mode'}:
                 raise ValueError('Unexpected model route configuration')
+            if settings.get('metadata_mode','custom') not in {'provider','custom'} or settings.get('reasoning_mode','explicit') not in {'explicit','provider_default'}:
+                raise ValueError('Invalid model metadata mode')
             limit = settings.get('output_limit', 4096)
             if type(limit) is not int or not 1 <= limit <= 1048576:
                 raise ValueError('Invalid output token limit')
@@ -44,7 +46,9 @@ def load_registry(directory):
             default = model['default_reasoning_level']
             if not levels or default not in levels or not levels <= {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}:
                 raise ValueError('Invalid model effort metadata')
-            if adapter == 'opencode' and (type(model['context_window']) is not int or model['context_window'] <= limit):
+            if settings.get('reasoning_mode')=='provider_default' and (levels!={'none'} or default!='none' or settings.get('send_variant')):
+                raise ValueError('Provider default must not override reasoning')
+            if adapter == 'opencode' and (type(model['context_window']) is not int or model['context_window'] < limit or (model['context_window']==limit and settings.get('metadata_mode')!='provider')):
                 raise ValueError('OpenCode needs a valid context limit')
             models[model_id] = {**settings, 'output_limit': limit, 'provider': provider_id, 'metadata': model}
             routes[model_id] = (provider_id, provider['endpoint'], default, levels)

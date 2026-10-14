@@ -48,8 +48,8 @@ def prepare_chat(payload):
             messages.append({"role": "tool", "tool_call_id": item["call_id"], "content": output if isinstance(output, str) else json.dumps(output)})
         else:
             raise GatewayError("Unsupported Chat Completions history item", 422)
-    outgoing = {"model": payload["model"], "messages": messages, "stream": False,
-                "max_tokens": payload.get("max_output_tokens", 4096)}
+    outgoing = {"model": payload["model"], "messages": messages, "stream": False}
+    if payload.get('max_output_tokens') is not None:outgoing['max_tokens']=payload['max_output_tokens']
     tools = [{"type": "function", "function": {key: value for key, value in tool.items() if key != "type"}} for tool in payload.get("tools", [])]
     if tools:
         outgoing["tools"] = tools

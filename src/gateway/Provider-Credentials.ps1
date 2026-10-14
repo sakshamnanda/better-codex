@@ -1,13 +1,20 @@
 param(
     [ValidateSet('Setup', 'Token', 'SaveJson', 'SaveProfiles')][string]$Mode = 'Setup',
-    [ValidatePattern('^[a-z][a-z0-9_-]{0,63}$')][string]$Provider
+    [ValidatePattern('^[a-z][a-z0-9_-]{0,63}$')][string]$Provider,
+    [ValidatePattern('^[a-z][a-z0-9_-]{0,63}$')][string]$Profile,
+    [string]$Storage
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
-$keyDirectory = Join-Path $PSScriptRoot 'keys'
-$providers = Get-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'providers.json') -Raw | ConvertFrom-Json
+$storageRoot = $PSScriptRoot
+if ($Storage) {
+    if ($Mode -ne 'Token') { throw 'Storage override is read-only' }
+    $storageRoot = [IO.Path]::GetFullPath($Storage)
+}
+$keyDirectory = Join-Path $storageRoot 'keys'
+$providers = Get-Content -LiteralPath (Join-Path (Split-Path $storageRoot -Parent) 'providers.json') -Raw | ConvertFrom-Json
 $entries = @($providers.PSObject.Properties | ForEach-Object { @{Id=$_.Name;Label=$_.Value.label} })
 
 function Get-ProfileKeyPath([string]$providerId, [string]$profileId) {
@@ -127,7 +134,7 @@ if ($Mode -eq 'SaveJson') {
 if ($Mode -eq 'Token') {
     try {
         if (-not $Provider -or $Provider -notin @($entries.Id)) { throw 'Configured provider required' }
-        $keyPath = Get-ActiveKeyPath $Provider
+        $keyPath = if ($Profile) { Get-ProfileKeyPath $Provider $Profile } else { Get-ActiveKeyPath $Provider }
         if (-not (Test-Path -LiteralPath $keyPath)) { throw 'Key missing' }
         $secureKey = ConvertTo-SecureString ((Get-Content -LiteralPath $keyPath -Raw).Trim())
         $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)

@@ -14,6 +14,9 @@ import uuid
 
 EFFORTS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 PROFILE_ID = re.compile(r'[a-z][a-z0-9_-]{0,63}')
+# Shared provider metadata parser lives beside the gateway protocol adapters.
+sys.path.insert(0,str(Path(__file__).resolve().parent / 'gateway' if (Path(__file__).resolve().parent / 'gateway').is_dir() else Path(__file__).resolve().parent.parent / 'gateway'))
+from model_metadata import discover, valid_model_id
 
 
 def credential_profiles(folder, providers):
@@ -89,26 +92,32 @@ def prepare_configuration(request, providers, catalog):
         raise ValueError('Configure between 1 and 128 external models.')
     seen = set()
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {'id', 'provider', 'label', 'context', 'output', 'efforts', 'default_effort'}:
+        fields={'id', 'provider', 'label', 'context', 'output', 'efforts', 'default_effort'}
+        if not isinstance(row, dict) or not fields <= set(row) or set(row)-fields-{'metadata_mode','reasoning_mode'}:
             raise ValueError('Unexpected model options.')
         mid, pid = row['id'], row['provider']
-        if not isinstance(mid, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}', mid) or mid in seen:
+        mode=row.get('metadata_mode','custom');reasoning_mode=row.get('reasoning_mode','explicit')
+        if mode not in {'provider','custom'} or reasoning_mode not in {'provider_default','explicit'}:
+            raise ValueError('Choose provider metadata or Customize.')
+        if not valid_model_id(mid,pid) or mid in seen:
             raise ValueError('Model IDs must be unique, nonempty API identifiers.')
         seen.add(mid)
         if pid not in providers or (mid in metadata and existing.get(mid) != pid):
             raise ValueError('Native models and existing provider assignments cannot be changed.')
         if not isinstance(row['label'], str) or not 1 <= len(row['label'].strip()) <= 160:
             raise ValueError('Model labels must contain 1 to 160 characters.')
-        if type(row['context']) is not int or not 2 <= row['context'] <= 4_194_304 or type(row['output']) is not int or not 1 <= row['output'] < row['context'] or row['output'] > 1_048_576:
-            raise ValueError('Use valid token limits; output must be smaller than context.')
+        if type(row['context']) is not int or not 2 <= row['context'] <= 4_194_304 or type(row['output']) is not int or not 1 <= row['output'] <= row['context'] or row['output'] > 1_048_576 or (mode=='custom' and row['output']==row['context']):
+            raise ValueError('Supply valid limits; use Customize if the provider does not report them.')
         efforts = row['efforts']
         if not isinstance(efforts, list) or not efforts or any(e not in EFFORTS for e in efforts) or len(set(efforts)) != len(efforts) or row['default_effort'] not in efforts:
             raise ValueError('Choose supported efforts and a default from that list.')
+        if reasoning_mode=='provider_default' and (efforts!=['none'] or row['default_effort']!='none'):
+            raise ValueError('Provider default must not claim specific reasoning levels.')
         template = metadata[providers[pid]['default_model']]
         model = metadata.get(mid, copy.deepcopy(template))
         model.update(slug=mid, display_name=row['label'].strip(), context_window=row['context'],
                      max_context_window=row['context'], default_reasoning_level=row['default_effort'],
-                     supported_reasoning_levels=[{'effort':e, 'description':e.capitalize() + ' reasoning effort'} for e in efforts],
+                     supported_reasoning_levels=[{'effort':e, 'description':'Provider default (no reasoning override)' if reasoning_mode=='provider_default' else e.capitalize() + ' reasoning effort'} for e in efforts],
                      supports_reasoning_effort_updates=len(efforts) > 1)
         if mid not in metadata:
             model['description'] = 'Custom model through ' + providers[pid]['label'] + '; verify provider capabilities before use.'
@@ -119,6 +128,11 @@ def prepare_configuration(request, providers, catalog):
             catalog['models'].append(model)
             metadata[mid] = model
         providers[pid]['models'].setdefault(mid, {})['output_limit'] = row['output']
+        route=providers[pid]['models'][mid]
+        if 'metadata_mode' in row:route['metadata_mode']=mode
+        if 'reasoning_mode' in row:route['reasoning_mode']=reasoning_mode
+        if providers[pid]['adapter']=='opencode' and ('metadata_mode' in row or 'reasoning_mode' in row):
+            route['send_variant']=reasoning_mode=='explicit'
     if not set(existing) <= seen:
         raise ValueError('Existing models must be retained to preserve chat and instruction mappings.')
     for pid, changes in request['providers'].items():
@@ -163,9 +177,34 @@ class Settings:
             'models':[{'id':mid,'provider':pid,'label':metadata[mid]['display_name'],
                 'context':metadata[mid]['context_window'],'output':route.get('output_limit',4096),
                 'efforts':[e['effort'] for e in metadata[mid]['supported_reasoning_levels']],
-                'default_effort':metadata[mid]['default_reasoning_level']} for pid,p in providers.items() for mid,route in p['models'].items()]}
+                'default_effort':metadata[mid]['default_reasoning_level'],
+                'metadata_mode':route.get('metadata_mode','custom'),
+                'reasoning_mode':route.get('reasoning_mode','explicit')} for pid,p in providers.items() for mid,route in p['models'].items()]}
 
-    def stage(self, keys=None):
+    def provider_key(self, pid, pending=None):
+        """Read only the selected external credential; never return it to the UI."""
+        profile=None
+        if pending and pid in pending:
+            entry=pending[pid];profile=entry['active']
+            key=next(p['key'] for p in entry['profiles'] if p['id']==profile)
+            if key:return key
+        ps=Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'
+        # Use the reviewed source reader so older staged deployments can read
+        # a named profile without changing their saved active selection.
+        reader=self.project/'src/gateway/Provider-Credentials.ps1'
+        command=[str(ps),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(reader),'-Mode','Token','-Provider',pid,
+            '-Storage',str(self.selected()/'gateway')]
+        if profile:command+=['-Profile',profile]
+        result=subprocess.run(command,text=True,capture_output=True,timeout=20,creationflags=subprocess.CREATE_NO_WINDOW)
+        return result.stdout if result.returncode==0 else ''
+
+    def fetch_metadata(self,pid,mid,definition,pending=None):
+        if not valid_model_id(mid,pid):raise ValueError('Enter a valid provider model ID or OpenRouter @preset/slug.')
+        key=self.provider_key(pid,pending)
+        try:return discover(pid,definition,mid,key)
+        finally:key=None
+
+    def stage(self, keys=None, select=True):
         """Fresh local files only; preserve all prior deployments and rollback state."""
         previous = self.selected()
         target = self.project / '.local' / ('deployment-settings-' + uuid.uuid4().hex[:10])
@@ -199,6 +238,7 @@ class Settings:
             selection.write_bytes(original_selection)
             raise
         (target / 'support/Previous-Settings-Deployment.txt').write_bytes(original_selection)
+        if not select:return target
         rollback = self.project / '.local/previous-api-settings-deployment.txt'
         if not rollback.exists(): rollback.write_bytes(original_selection)
         temporary = selection.with_suffix('.tmp')
@@ -209,6 +249,13 @@ class Settings:
     def handle(self, request):
         if not isinstance(request, dict): raise ValueError('Invalid settings request.')
         if request == {'action':'get'}: return self.snapshot()
+        if set(request)=={'action','revision','provider','model'} and request['action']=='metadata':
+            with self.lock:
+                current=self.snapshot()
+                if request['revision']!=current['revision']:raise ValueError('Settings changed. Reopen Better Codex before fetching metadata.')
+                pid=request['provider']
+                if not isinstance(pid,str) or pid not in current['providers']:raise ValueError('Choose a configured external provider.')
+                return self.fetch_metadata(pid,request['model'],current['providers'][pid])
         if set(request) != {'action','revision','providers','models','keys'} or request['action'] != 'save':
             raise ValueError('Invalid settings action.')
         with self.lock:
@@ -217,18 +264,30 @@ class Settings:
                 raise ValueError('Settings changed elsewhere. Close and reopen Better Codex before saving.')
             keys = prepare_credentials(request['keys'], current['providers'])
             folder = self.project / 'config'
-            providers, catalog = prepare_configuration(request,json.loads((folder / 'providers.json').read_text(encoding='utf-8')),json.loads((folder / 'models.json').read_text(encoding='utf-8')))
+            original_providers=json.loads((folder/'providers.json').read_text(encoding='utf-8'))
+            original_catalog=json.loads((folder/'models.json').read_text(encoding='utf-8'))
+            # Validate destination/schema before making any metadata request.
+            # Provisional limits are never saved; automatic rows are replaced
+            # exclusively by the authenticated provider response below.
+            validated=copy.deepcopy(request)
+            for row in validated['models']:
+                if isinstance(row,dict) and row.get('metadata_mode')=='provider':
+                    row.update(context=2,output=1,efforts=['none'],default_effort='none',reasoning_mode='provider_default')
+                    if not row.get('label'):row['label']=row.get('id','')
+            providers,catalog=prepare_configuration(validated,original_providers,original_catalog)
+            self.validate(providers,catalog,folder)
+            for index,row in enumerate(validated['models']):
+                if row.get('metadata_mode')!='provider':continue
+                info=self.fetch_metadata(row['provider'],row['id'],providers[row['provider']],keys)
+                if not info['context'] or not info['output']:raise ValueError('Provider limits are incomplete. Choose Customize and supply the missing values.')
+                if info['tools'] is False:raise ValueError('The provider reports no tool support; choose a tool-capable model.')
+                row.update(context=info['context'],output=info['output'],efforts=info['efforts'] or ['none'],
+                    default_effort=request['models'][index]['default_effort'] if info['efforts'] and request['models'][index]['default_effort'] in info['efforts'] else info['default_effort'] or 'none',
+                    reasoning_mode='explicit' if info['efforts'] else 'provider_default')
+                if not request['models'][index]['label']:row['label']=info['label']
+            providers,catalog=prepare_configuration(validated,original_providers,original_catalog)
+            self.validate(providers,catalog,folder)
             # Validate with the same routing and instruction guards used at launch.
-            sys.path.insert(0,str(self.project / 'src/gateway'))
-            from provider_registry import load_registry
-            from model_profiles import load_profiles
-            with tempfile.TemporaryDirectory(dir=self.project / '.local',prefix='settings-validation-') as temp:
-                validation = Path(temp)
-                (validation / 'providers.json').write_text(json.dumps(providers))
-                (validation / 'models.json').write_text(json.dumps(catalog))
-                shutil.copyfile(folder / 'instructions.json',validation / 'instructions.json')
-                shutil.copytree(folder / 'instructions',validation / 'instructions')
-                load_registry(validation); load_profiles(validation)
             originals = {name:(folder / name).read_bytes() for name in ('providers.json','models.json')}
             written = {}
             try:
@@ -244,3 +303,14 @@ class Settings:
                 raise
             return {'message':'Saved for the next launch. Close and reopen Codex (Custom Providers) when ready; the running chats are unchanged.',
                     'settings':self.snapshot()}
+
+    def validate(self,providers,catalog,folder):
+        from provider_registry import load_registry
+        from model_profiles import load_profiles
+        with tempfile.TemporaryDirectory(dir=self.project/'.local',prefix='settings-validation-') as temp:
+            validation=Path(temp)
+            (validation/'providers.json').write_text(json.dumps(providers))
+            (validation/'models.json').write_text(json.dumps(catalog))
+            shutil.copyfile(folder/'instructions.json',validation/'instructions.json')
+            shutil.copytree(folder/'instructions',validation/'instructions')
+            load_registry(validation);load_profiles(validation)

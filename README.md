@@ -9,7 +9,7 @@ Windows Codex desktop custom providers, using the original installed signed app 
 - The original model/effort controls gain ChatGPT, OpenRouter, Merge Gateway and OpenCode Zen categories. A version-checked static UI resource is supplied in memory over private inherited pipes. Package files, signatures, security fuses and permissions remain intact. There is no debugging network port.
 - A Windows package-context launcher starts the actual installed executable. Two backed-up user settings point to the local gateway and model catalog while it runs. Closing the app restores ordinary settings; manual rollback is also provided.
 - Codex retains tool execution, approvals, project instructions and chat history. The OpenCode helper returns data-only tool requests; it does not execute the caller's shell commands itself. Cross-provider history is normalized, and private native authentication is not sent to external providers.
-- `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. The saved transcript and native rollback checkpoint remain intact.
+- For external models, `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. Native ChatGPT manual and automatic compaction use the ordinary native stream without requiring a portable summary. The saved transcript and native rollback checkpoint remain intact.
 
 This is a tested local customization, not an official provider-picker extension. Updates require a compatibility review; source/hash guards refuse unknown builds.
 
@@ -24,6 +24,8 @@ The custom Desktop and Start menu shortcuts target Windows PowerShell with the p
 For rollback, close Codex and run `scripts/Rollback.cmd`. Sign-in and chat databases are retained. Select a ChatGPT model before continuing an external-model chat through the ordinary launcher.
 
 Open **Settings → Better Codex** for **Providers**, **API keys** and **Models**. These sections are also available in the model menu. Edit compatible provider URLs/defaults, replace masked keys or add/edit external model IDs, token limits and effort metadata. Blank key fields keep the saved DPAPI-encrypted keys. ChatGPT sign-in and the verified OpenCode endpoint remain managed by their original clients.
+
+New models/presets default to **From provider**. Enter an API model ID (or OpenRouter `@preset/slug`); metadata is fetched after leaving the ID field and verified again on save. **Refresh metadata** fetches it explicitly. Unknown limits remain blank; choose **Customize** to supply missing values or override reported ones. If exact reasoning levels are unavailable, **Provider default** sends no reasoning override. Existing manually configured models retain their settings. Published limits are ceilings, not guarantees for every account or routed endpoint.
 
 In **API keys**, each provider supports up to 16 named key profiles. The original key appears as **Default**. Use **Add Merge Gateway API key**, name the new profile and enter its key, then choose **Active API key**. Existing profiles remain stored; only the selected profile is used for that provider. Save and relaunch when ready to apply the selection. This is a provider-wide choice for all its models/chats, with no automatic key rotation or fallback.
 
@@ -63,6 +65,7 @@ Committed configuration contains public model metadata and short starter instruc
 python scripts/build-deployment.py
 python tests/check-overlay-cache.py
 python tests/check-api-settings.py
+python tests/check-model-metadata.py
 python tests/check-rollback.py
 python tests/check-provider-registry.py
 python tests/check-model-profiles.py

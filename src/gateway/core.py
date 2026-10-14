@@ -16,7 +16,7 @@ import re
 from urllib.parse import urlsplit
 
 CHATGPT = "https://chatgpt.com"
-from provider_registry import PROVIDERS, ROUTES as EXTERNAL
+from provider_registry import PROVIDERS, MODELS, ROUTES as EXTERNAL
 # ponytail: bounded prototype payloads; expand only after attachment tests.
 MAX_BODY = 32 * 1024 * 1024
 HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "host", "content-length"}
@@ -409,7 +409,9 @@ class GatewayCore:
         if PROJECT_WORKFLOW not in instructions:
             instructions += PROJECT_WORKFLOW
         forwarded["instructions"] = instructions + current_route_instructions(model, provider) + names.delegation_guidance()
-        if isinstance(forwarded.get("reasoning"), dict):
+        if MODELS.get(model,{}).get('reasoning_mode')=='provider_default':
+            forwarded.pop('reasoning',None)
+        elif isinstance(forwarded.get("reasoning"), dict):
             reasoning = dict(forwarded["reasoning"])
             if reasoning.get("effort") not in levels:
                 reasoning["effort"] = default_effort

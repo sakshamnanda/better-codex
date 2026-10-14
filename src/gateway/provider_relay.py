@@ -46,6 +46,13 @@ PUBLIC_RELAY_ERRORS = frozenset({
     'Unexpected relay tool output',
 })
 
+def limit_output(payload,model):
+    # A published ceiling is not a default output reservation. Let the
+    # provider choose its default unless the caller supplies a cap.
+    limit=model['output_limit']
+    if model.get('metadata_mode')!='provider' or payload.get('max_output_tokens') is not None:
+        payload['max_output_tokens']=min(payload.get('max_output_tokens') or limit,limit)
+
 
 def provider_error_diagnostic(body):
     """Retain fixed error vocabulary only; never persist an upstream body."""
@@ -241,9 +248,7 @@ class RealGateway(RelayBase):
             outgoing = json.loads(prepared.body)
             if outgoing["model"] not in {entry["slug"] for entry in self.server.catalog["models"]}:
                 raise GatewayError("Model is outside this test's selected catalog", 422)
-            # ponytail: 4096 output tokens per test request; raise after compatibility is proven.
-            limit = MODELS[outgoing["model"]]["output_limit"]
-            outgoing["max_output_tokens"] = min(outgoing.get("max_output_tokens") or limit, limit)
+            limit_output(outgoing,MODELS[outgoing['model']])
             adapter = PROVIDERS[prepared.provider]["adapter"]
             chat = adapter == "chat_completions"
             body = json.dumps(prepare_chat(outgoing) if chat else outgoing).encode()
