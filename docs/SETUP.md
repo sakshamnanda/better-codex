@@ -39,6 +39,10 @@ The newer client's public source fetches authenticated provider configuration fr
 
 Merge registration and offline checks passed on 2026-10-12. Its key is entered with `scripts/Setup-Keys.cmd` in the local masked **Merge Gateway** field. Each saved provider shows **Saved: ******** (leave blank to keep)** beneath its empty editable field; providers without a key show **No key saved yet**. The indicator uses file presence only and never decrypts a saved key or puts masking characters into the editable field. Existing provider keys remain when their fields are blank. The unauthenticated catalog returns 401, so account-specific model/vendor availability and real replies/tool calls still require the Merge key and a live test. No charged Merge request was made during registration. Close the old app normally and reopen through the custom shortcut to load the prepared category.
 
+## Compaction validation
+
+On 2026-10-14, the signed desktop setup successfully compacted the existing GLM mining thread and continued real Merge requests with tool calls/results. The installed-backend offline check also verifies the same-thread model state and a native terminal echo using mock inference. Synthetic native protocol checks verified the real ChatGPT checkpoint/portable-summary flow and the correction for invalid optional custom-tool IDs. Compaction uses ChatGPT plan usage at its fixed trusted origin; external provider credentials never authenticate that checkpoint request. See `docs/PROVIDERS.md` for the encrypted local summary cache and failure behavior.
+
 ## References
 
 - [Electron ASAR integrity](https://www.electronjs.org/docs/latest/tutorial/asar-integrity)

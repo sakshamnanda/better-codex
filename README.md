@@ -5,10 +5,11 @@ Windows Codex desktop custom providers, using the original installed signed app 
 ## What was changed
 
 - A local inference gateway chooses the provider from each request's model ID. ChatGPT uses its normal signed-in service; Nemotron uses OpenRouter; Space Bunny uses the genuine isolated OpenCode client. Models remain independent between chats.
-- Merge Gateway adds `zai/glm-5.3-flash` through its OpenAI-compatible Responses endpoint, with a separate Merge key. Its registration/offline checks are complete; real provider verification needs that key.
-- The original model/effort controls gain ChatGPT, OpenRouter and OpenCode Zen categories. A version-checked static UI resource is supplied in memory over private inherited pipes. Package files, signatures, security fuses and permissions remain intact. There is no debugging network port.
+- Merge Gateway adds `zai/glm-5.3-flash` through its OpenAI-compatible Responses endpoint, with a separate Merge key. Replies and Codex tool use have been verified in the signed desktop setup; each account still needs model access and credit.
+- The original model/effort controls gain ChatGPT, OpenRouter, Merge Gateway and OpenCode Zen categories. A version-checked static UI resource is supplied in memory over private inherited pipes. Package files, signatures, security fuses and permissions remain intact. There is no debugging network port.
 - A Windows package-context launcher starts the actual installed executable. Two backed-up user settings point to the local gateway and model catalog while it runs. Closing the app restores ordinary settings; manual rollback is also provided.
 - Codex retains tool execution, approvals, project instructions and chat history. The OpenCode helper returns data-only tool requests; it does not execute the caller's shell commands itself. Cross-provider history is normalized, and private native authentication is not sent to external providers.
+- `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. The saved transcript and native rollback checkpoint remain intact.
 
 This is a tested local customization, not an official provider-picker extension. Updates require a compatibility review; source/hash guards refuse unknown builds.
 
@@ -54,6 +55,8 @@ Profiles load from the verified deployment at service startup. After changing th
 
 API keys stay DPAPI-encrypted and local. Runtime data, logs, backups, profiles, vendor binaries and generated app JavaScript are ignored by Git. The repository is local; no remote or upload is configured.
 
+Committed configuration contains public model metadata and short starter instruction templates. Embedded native prompt exports and personal instruction customizations are local configuration, not publication assets. The local catalogue retains its native templates; review local configuration changes before adding them to a public commit.
+
 ## Local checks
 
 ```powershell
@@ -68,6 +71,9 @@ python tests/check-delegation-tools.py
 python tests/check-tool-compatibility.py
 python tests/check-retired-tool-history.py
 python tests/check-cross-chat-context.py
+python tests/check-provider-errors.py
+python tests/check-compaction.py
+python tests/check-compaction-runtime.py
 python tests/check-native-client-tools.py
 node tests/check-picker.cjs
 node tests/check-settings-layout.cjs
