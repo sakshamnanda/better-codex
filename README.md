@@ -16,6 +16,10 @@ This is a tested local customization, not an official provider-picker extension.
 
 Use the **Codex (Custom Providers)** desktop shortcut for provider support. The existing ordinary Codex shortcut remains available. Provider/model/effort switching needs no restart after launch.
 
+The custom Desktop and Start menu shortcuts target Windows PowerShell with the project launcher arguments and the distinct `BetterCodex.CustomProviders` shortcut identity. To create or repair them without launching the app, run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows/Install-Shortcuts.ps1`. Existing shortcuts are backed up under `.local/shortcut-backups/`. If an older pinned Start tile opens ordinary Codex, unpin it and pin **Codex (Custom Providers)** from Start search again. Pin the custom shortcut entry rather than the running app's ordinary taskbar identity. Close the ordinary app before launching the custom setup; the launch guard preserves any open window.
+
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows/Select-Deployment.ps1 -Mode Launch -Preflight` verifies the selected launcher/build and reports whether Codex is still running, without changing configuration or processes.
+
 For rollback, close Codex and run `scripts/Rollback.cmd`. Sign-in and chat databases are retained. Select a ChatGPT model before continuing an external-model chat through the ordinary launcher.
 
 Open **Settings → Better Codex** for **Providers**, **API keys** and **Models**. These sections are also available in the model menu. Edit compatible provider URLs/defaults, replace masked keys or add/edit external model IDs, token limits and effort metadata. Blank key fields keep the saved DPAPI-encrypted keys. ChatGPT sign-in and the verified OpenCode endpoint remain managed by their original clients.
