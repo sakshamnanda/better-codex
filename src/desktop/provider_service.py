@@ -98,7 +98,9 @@ class Service:
                             '-Mode','Token','-Provider',pid,'-Storage',str(target/'gateway')],capture_output=True,text=True,timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
                         if result.returncode:raise ValueError('Selected OpenCode credential could not be loaded; running setup retained.')
                         return result.stdout
-                    candidate=real.OpenCodeEngine(candidate_key,root=target,registry=(providers,models))
+                    # Keep the original verified executable/parent identity so
+                    # guarded crash recovery can recognize replacement engines.
+                    candidate=real.OpenCodeEngine(candidate_key,root=target,registry=(providers,models),executable_root=ROOT)
                     candidate.start(caller_tools=True)
                 state_path=ROOT/'support/Gateway-State.json'
                 pending_state=state_path.with_suffix('.live-tmp')

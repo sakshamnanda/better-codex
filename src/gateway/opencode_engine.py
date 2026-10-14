@@ -21,16 +21,17 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class OpenCodeEngine:
-    def __init__(self, key_supplier, root=None, registry=None):
+    def __init__(self, key_supplier, root=None, registry=None, executable_root=None):
         self.key_supplier = key_supplier
         self.root=Path(root) if root is not None else ROOT
+        self.executable_root=Path(executable_root) if executable_root is not None else self.root
         self.providers,self.models=registry if registry is not None else (PROVIDERS,MODELS)
         self.process = None
         self.directory = self.root / "support/opencode-runtime"
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def start(self, mock_url=None, caller_tools=False):
-        exe = self.root / "opencode-engine/opencode.exe"
+        exe = self.executable_root / "opencode-engine/opencode.exe"
         manifest = json.loads((exe.parent / "Verification.json").read_text())
         assert hashlib.sha256(exe.read_bytes()).hexdigest() == manifest["executable_sha256"]
         self.directory.mkdir(exist_ok=True)

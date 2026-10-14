@@ -15,6 +15,7 @@ from live_settings import ReloadGate,verify_generation
 import provider_service as service
 import provider_registry as registry
 import runtime_mixed as mixed
+from opencode_engine import OpenCodeEngine
 
 gate=ReloadGate();started=threading.Event();finish=threading.Event();published=threading.Event();errors=[]
 def request():
@@ -38,6 +39,9 @@ with gate.request():
   with gate.replace(timeout=0):raise AssertionError('Active request ignored')
  except ValueError:pass
 assert not gate.swapping
+owned_engine=OpenCodeEngine(lambda provider:'owned-unused-fixture-key',root=root/'.local/owned-data-fixture',executable_root=root/'.local/owned-executable-fixture')
+assert owned_engine.directory.parent==owned_engine.root/'support'
+assert owned_engine.executable_root!=owned_engine.root
 
 scratch=root/'.local/test-work'/('live-settings-'+uuid.uuid4().hex[:8]);local=scratch/'.local';local.mkdir(parents=True)
 current,target=local/'deployment-original',local/'deployment-new'
