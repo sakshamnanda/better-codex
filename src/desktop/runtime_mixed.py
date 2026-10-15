@@ -1,7 +1,7 @@
 """Signed desktop replica: native ChatGPT routing plus the proven external service."""
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit,parse_qs
 from contextlib import nullcontext
 import hashlib
 import importlib.util
@@ -56,12 +56,16 @@ def record(event):
         temporary.replace(SUPPORT / 'Mixed-Results.json')
 
 
-def external_headers():
+def external_headers(generation=None):
     headers = {'Authorization': 'Bearer ' + DUMMY, 'Content-Type': 'application/json', 'Accept': 'text/event-stream'}
+    if generation is not None:headers['X-Better-Codex-Generation']=generation
     return headers
 
 
-def prepare_routed_request(core, target, headers, body):
+def prepare_routed_request(core, target, headers, body, profile_settings=None, profiles=None):
+    external=core.external
+    profile_settings=PROFILE_SETTINGS if profile_settings is None else profile_settings
+    profiles=PROFILES if profiles is None else profiles
     # Check the actual URL, local capability, Host and bearer before parsing data.
     # GET /responses is deliberately unsupported after these shared checks.
     try: core.prepare('GET', target, headers)
@@ -76,18 +80,18 @@ def prepare_routed_request(core, target, headers, body):
         if triggers != [len(history)-1] or set(history[-1]) - {'type','id'}:
             raise GatewayError('Invalid native compaction trigger',422)
         requested_model = incoming['model']
-        if requested_model in EXTERNAL:
+        if requested_model in external:
             if COMPACTION_MODEL not in core.native_models:
                 raise GatewayError('Portable compaction requires the signed-in ChatGPT compaction model',422)
             # This is a checkpoint operation only. The desktop's selected model
             # and native per-thread settings remain untouched.
             incoming = {**incoming,'model':COMPACTION_MODEL}
-    if incoming['model'] in EXTERNAL or incoming['model'] in core.native_models:
-        incoming = apply_profile(incoming, PROFILE_SETTINGS, PROFILES)
+    if incoming['model'] in external or incoming['model'] in core.native_models:
+        incoming = apply_profile(incoming, profile_settings, profiles)
         headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
         body = json.dumps(incoming).encode()
     removed = 0
-    if incoming['model'] in EXTERNAL:
+    if incoming['model'] in external:
         tools = incoming.get('tools',[])
         if not isinstance(tools,list) or any(not isinstance(tool,dict) for tool in tools): raise GatewayError('Invalid tool declarations')
         hosted_search = {'web_search','web_search_preview'}
@@ -121,7 +125,7 @@ def prepare_routed_request(core, target, headers, body):
             headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
             body = json.dumps(incoming).encode()
     prepared = core.prepare('POST',target,headers,body)
-    if triggers and requested_model in EXTERNAL:
+    if triggers and requested_model in external:
         headers_identity = [(k,v) for k,v in prepared.headers if k.lower() != 'accept-encoding']+[('Accept-Encoding','identity')]
         from dataclasses import replace
         prepared = replace(prepared,kind='compaction',headers=tuple(headers_identity))
@@ -145,13 +149,19 @@ class MixedGateway(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def core(self):
+        settings=getattr(self,'runtime_settings',None)
         return GatewayCore(self.server.capability, self.server.server_port, self.server.native_models,
-                           lambda _provider: 'synthetic-key-for-local-validation-only')
+                           lambda _provider: 'synthetic-key-for-local-validation-only',registry=settings.registry if settings else None)
+
+    def catalog_header(self):
+        publisher=getattr(self.server,'catalog_cache',None)
+        if publisher:self.send_header('x-models-etag',publisher.tag(self.server.model_catalog)[1])
 
     def relay(self, upstream, event=None):
         self.send_response(upstream.status)
         for name, value in upstream.headers.items():
-            if name.lower() not in HOP_HEADERS | {'content-length'}: self.send_header(name, value)
+            if name.lower() not in HOP_HEADERS | {'content-length'} and not (getattr(self.server,'catalog_cache',None) and name.lower()=='x-models-etag'): self.send_header(name, value)
+        MixedGateway.catalog_header(self)
         self.send_header('Connection', 'close')
         self.end_headers()
         if event is not None:
@@ -166,6 +176,10 @@ class MixedGateway(BaseHTTPRequestHandler):
             record(event)
 
     def do_GET(self):
+        generations=getattr(self.server,'settings_generations',None)
+        if generations:
+            with generations.request() as (self.generation_token,self.runtime_settings):MixedGateway._get(self)
+            return
         gate=getattr(self.server,'reload_gate',None)
         with gate.request() if gate else nullcontext():MixedGateway._get(self)
 
@@ -173,6 +187,17 @@ class MixedGateway(BaseHTTPRequestHandler):
         try:
             prepared = self.core().prepare('GET', self.path, list(self.headers.items()))
             if prepared.kind != 'models': raise GatewayError('Unsupported replica gateway endpoint', 404)
+            publisher=getattr(self.server,'catalog_cache',None)
+            if publisher:
+                catalog=self.runtime_settings.catalog if hasattr(self,'runtime_settings') else self.server.model_catalog
+                version=parse_qs(urlsplit(self.path).query).get('client_version',[''])[0]
+                if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?',version):raise GatewayError('Invalid model catalog client version',400)
+                payload,etag=publisher.describe(catalog,version)
+                self.send_response(200);self.send_header('Content-Type','application/json')
+                self.send_header('ETag',etag);self.send_header('Content-Length',str(len(payload)));self.send_header('Connection','close');self.end_headers()
+                self.wfile.write(payload);self.close_connection=True
+                record({'kind':'models','dynamic_catalog':True,'model_count':len(catalog['models'])})
+                return
             with open_upstream(prepared.url, prepared.headers) as upstream:
                 if upstream.headers.get('Content-Encoding') not in (None, 'identity'):
                     raw = decode_body(upstream.read(MAX_BODY + 1), upstream.headers.get('Content-Encoding'))
@@ -199,6 +224,10 @@ class MixedGateway(BaseHTTPRequestHandler):
         except (OSError, ValueError, KeyError): self.fail(502, 'Model metadata could not be loaded')
 
     def do_POST(self):
+        generations=getattr(self.server,'settings_generations',None)
+        if generations:
+            with generations.request() as (self.generation_token,self.runtime_settings):MixedGateway._post(self)
+            return
         gate=getattr(self.server,'reload_gate',None)
         with gate.request() if gate else nullcontext():MixedGateway._post(self)
 
@@ -210,16 +239,18 @@ class MixedGateway(BaseHTTPRequestHandler):
             if not 0 < length <= MAX_BODY: raise GatewayError('Invalid request size', 413)
             body = self.rfile.read(length)
             if len(body) != length: raise GatewayError('Incomplete request body')
-            prepared, incoming, removed = prepare_routed_request(self.core(),self.path,list(self.headers.items()),body)
+            settings=getattr(self,'runtime_settings',None)
+            profile_settings,profiles=(settings.profile_settings,settings.profiles) if settings else (PROFILE_SETTINGS,PROFILES)
+            prepared, incoming, removed = prepare_routed_request(self.core(),self.path,list(self.headers.items()),body,profile_settings,profiles)
             model = incoming.get('model')
             event = {'kind': 'responses', 'model': model, 'provider': prepared.provider, 'upstream_eof': False}
-            event.update(profile_diagnostics(model, PROFILE_SETTINGS, PROFILES))
+            event.update(profile_diagnostics(model, profile_settings, profiles))
             if removed: event['openai_hosted_search_declarations_removed'] = removed
             record(event)
             if prepared.provider != 'openai':
                 # The existing real service receives only its dummy local bearer.
                 # It holds the DPAPI provider keys and strips native private fields.
-                upstream = open_upstream(self.server.external_url, external_headers(), prepared.body)
+                upstream = open_upstream(self.server.external_url, external_headers(getattr(self,'generation_token',None)), prepared.body)
             else:
                 if prepared.provider != 'openai': raise GatewayError('Model is not allowed in this replica', 422)
                 upstream = open_upstream(prepared.url, prepared.headers, prepared.body)
@@ -229,6 +260,7 @@ class MixedGateway(BaseHTTPRequestHandler):
                     if upstream.headers.get_content_type() not in {'text/event-stream','text/plain'}: raise GatewayError('Native checkpoint did not return an event stream',502)
                     self.send_response(upstream.status)
                     self.send_header('Content-Type','text/event-stream')
+                    MixedGateway.catalog_header(self)
                     self.send_header('Connection','close')
                     self.end_headers()
                     event['kind'] = 'compaction'
@@ -252,6 +284,7 @@ class MixedGateway(BaseHTTPRequestHandler):
                     if upstream.headers.get_content_type() != 'text/event-stream': raise GatewayError('External service did not return an event stream', 502)
                     self.send_response(upstream.status)
                     self.send_header('Content-Type', 'text/event-stream')
+                    MixedGateway.catalog_header(self)
                     self.send_header('Connection', 'close')
                     self.end_headers()
                     event['upstream_http_status'] = upstream.status
@@ -307,7 +340,7 @@ class MixedGateway(BaseHTTPRequestHandler):
                     known_types = {'function','namespace','web_search','web_search_preview','tool_search','mcp','computer','computer_use_preview','code_interpreter','image_generation'}
                     types = sorted({tool.get('type') if tool.get('type') in known_types else 'other' for tool in incoming.get('tools',[])})
                     selected = incoming.get('model')
-                    event = {'kind':'request_rejected','model': selected if selected in EXTERNAL | self.server.native_models else 'other','declared_tool_types':types}
+                    event = {'kind':'request_rejected','model': selected if selected in set(self.core().external) | self.server.native_models else 'other','declared_tool_types':types}
                 except (ValueError,TypeError,KeyError): pass
             if event is not None: event['gateway_error'] = str(error); record(event)
             if not streaming: self.fail(error.status, str(error))

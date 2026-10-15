@@ -5,19 +5,29 @@ import re
 from urllib.parse import urlsplit
 
 
+def public_catalog(catalog,providers=None):
+    """Keep retired metadata for instruction mappings, never advertise it."""
+    disabled={mid for p in (providers or {}).values() for mid,route in p['models'].items()
+              if not p.get('enabled',True) or not route.get('enabled',True)}
+    return {**catalog, 'models':[{k:v for k,v in model.items() if not k.startswith('better_codex_')}
+        for model in catalog['models'] if not model.get('better_codex_removed') and model['slug'] not in disabled]}
+
+
 def load_registry(directory):
     providers = json.loads((directory / 'providers.json').read_text(encoding='utf-8'))
     catalog = json.loads((directory / 'models.json').read_text(encoding='utf-8'))['models']
     metadata = {model['slug']: model for model in catalog}
-    if len(metadata) != len(catalog) or not isinstance(providers, dict) or not providers:
+    if len(metadata) != len(catalog) or not isinstance(providers, dict):
         raise ValueError('Duplicate catalog IDs or invalid provider registry')
-    models, routes = {}, {}
+    models, routes, seen = {}, {}, set()
     for provider_id, provider in providers.items():
         if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', provider_id) or provider_id == 'openai':
             raise ValueError('Invalid external provider ID; openai is reserved for ChatGPT')
-        if set(provider) != {'label', 'adapter', 'endpoint', 'default_model', 'models'}:
+        required={'label','adapter','endpoint','default_model','models'}
+        if not required<=set(provider) or set(provider)-required-{'enabled'}:
             raise ValueError('Unexpected provider configuration fields')
-        if not isinstance(provider['label'], str) or not provider['label'].strip():
+        if type(provider.get('enabled',True)) is not bool:raise ValueError('Provider enabled must be a boolean')
+        if not isinstance(provider['label'], str) or not 1<=len(provider['label'].strip())<=160 or any(c in provider['label'] for c in '\r\n\0'):
             raise ValueError('Provider label is required')
         endpoint = urlsplit(provider['endpoint'])
         if endpoint.scheme != 'https' or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment or endpoint.hostname == 'chatgpt.com':
@@ -27,13 +37,15 @@ def load_registry(directory):
             raise ValueError('Unknown adapter; implement and verify its protocol first')
         if adapter == 'opencode' and (provider_id != 'opencode' or provider['endpoint'] != 'https://opencode.ai/zen/v1/chat/completions'):
             raise ValueError('The genuine OpenCode adapter is restricted to OpenCode Zen')
-        if not isinstance(provider['models'], dict) or provider['default_model'] not in provider['models']:
+        if not isinstance(provider['models'], dict) or (provider['default_model'] not in provider['models'] if provider['models'] else provider['default_model'] != ''):
             raise ValueError('Provider default must be an explicitly configured model')
         for model_id, settings in provider['models'].items():
-            if model_id in models or model_id not in metadata:
+            if model_id in seen or model_id not in metadata:
                 raise ValueError('Model must have unique routing and catalog metadata')
-            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant','metadata_mode','reasoning_mode'}:
+            seen.add(model_id)
+            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant','metadata_mode','reasoning_mode','enabled'}:
                 raise ValueError('Unexpected model route configuration')
+            if type(settings.get('enabled',True)) is not bool:raise ValueError('Model enabled must be a boolean')
             if settings.get('metadata_mode','custom') not in {'provider','custom'} or settings.get('reasoning_mode','explicit') not in {'explicit','provider_default'}:
                 raise ValueError('Invalid model metadata mode')
             limit = settings.get('output_limit', 4096)
@@ -42,6 +54,8 @@ def load_registry(directory):
             if type(settings.get('send_variant', False)) is not bool or (settings.get('send_variant') and adapter != 'opencode'):
                 raise ValueError('Variants are specific to the genuine OpenCode adapter')
             model = metadata[model_id]
+            if model.get('better_codex_removed') or model.get('better_codex_provider',provider_id)!=provider_id:
+                raise ValueError('Retired models cannot be routed or reassigned')
             levels = {entry['effort'] for entry in model['supported_reasoning_levels']}
             default = model['default_reasoning_level']
             if not levels or default not in levels or not levels <= {'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'}:
@@ -50,8 +64,11 @@ def load_registry(directory):
                 raise ValueError('Provider default must not override reasoning')
             if adapter == 'opencode' and (type(model['context_window']) is not int or model['context_window'] < limit or (model['context_window']==limit and settings.get('metadata_mode')!='provider')):
                 raise ValueError('OpenCode needs a valid context limit')
-            models[model_id] = {**settings, 'output_limit': limit, 'provider': provider_id, 'metadata': model}
-            routes[model_id] = (provider_id, provider['endpoint'], default, levels)
+            if provider.get('enabled',True) and settings.get('enabled',True):
+                models[model_id] = {**settings, 'output_limit': limit, 'provider': provider_id, 'metadata': model}
+                routes[model_id] = (provider_id, provider['endpoint'], default, levels)
+        active=[mid for mid,settings in provider['models'].items() if settings.get('enabled',True)]
+        if active and provider['default_model'] not in active:provider['default_model']=active[0]
     return providers, models, routes
 
 

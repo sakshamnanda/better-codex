@@ -2,6 +2,8 @@
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+import hashlib
 import shutil
 import sys
 import threading
@@ -11,10 +13,10 @@ root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root / 'src/gateway'))
 import opencode_engine
 
-deployment = root / (root / '.local/deployment-path.txt').read_text().strip()
+deployment = root / os.environ.get('BETTER_CODEX_TEST_DEPLOYMENT',(root / '.local/deployment-path.txt').read_text().strip())
 scratch = root / '.local/test-work' / ('opencode-engine-' + uuid.uuid4().hex[:8])
 dependency_source = deployment / 'support/opencode-runtime/config/opencode/node_modules'
-shutil.copytree(dependency_source, scratch / 'config/opencode/node_modules')
+vendor_checks=json.loads((deployment/'Vendor-Checksums.json').read_text())
 offered = []
 
 
@@ -57,7 +59,9 @@ try:
     assert function['name'] == 'exec_command'
     assert json.loads(function['arguments'])['cmd'] == 'Write-Output LOCAL_RELAY_FIXTURE'
     assert offered and all(names == {'codex_request', 'bash'} for names in offered)
-    print('PASS: actual OpenCode engine hides native tools, preserves deny policy, and returns a Codex tool request without executing it; only local fixture requests used.')
+    assert (scratch/'config/opencode/node_modules').resolve()==dependency_source.resolve(),'Engine recreated vendor dependencies in writable state'
+    assert all(hashlib.sha256((dependency_source/name).read_bytes()).hexdigest()==expected for name,expected in vendor_checks.items())
+    print('PASS: actual OpenCode engine reuses unchanged verified vendor assets without copying/installing dependencies; native tools hidden, deny policy preserved, Codex tool request returned without execution. Local fixture requests only.')
 finally:
     engine.stop()
     server.shutdown(); server.server_close()

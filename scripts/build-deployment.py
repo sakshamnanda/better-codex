@@ -75,10 +75,11 @@ assert hashlib.sha256(data).hexdigest() == overlay['original_source_sha256']
 source = data.decode('utf-8'); helper = (ROOT / 'src/ui/settings-bridge.js').read_text(encoding='utf-8') + '\n' + (ROOT / 'src/ui/provider-picker.js').read_text(encoding='utf-8')
 picker = {
     'providers': [{'id': 'openai', 'label': 'ChatGPT'}] + [
-        {'id': provider_id, 'label': provider['label'], 'defaultModel': provider['default_model']}
+        {'id': provider_id, 'label': provider['label'], 'defaultModel': provider['default_model'],'enabled':provider.get('enabled',True)}
         for provider_id, provider in PROVIDERS.items()
     ],
-    'models': {model_id: model['provider'] for model_id, model in MODELS.items()},
+    'models': {model_id: provider_id for provider_id,p in PROVIDERS.items() for model_id in p['models']},
+    'disabledModels': [mid for p in PROVIDERS.values() for mid,route in p['models'].items() if not route.get('enabled',True)],
 }
 helper = 'const gatewayProviderConfig = ' + json.dumps(picker).replace('<', '\\u003c') + ';\n' + helper
 marker = 'function b8e(e){'
@@ -104,15 +105,15 @@ with (Path(manifest['source_app']) / 'resources/app.asar').open('rb') as handle:
     for filename,expected in native_hashes.items():
         item=tree[filename];handle.seek(8+header_size+int(item['offset']))
         assert hashlib.sha256(handle.read(item['size'])).hexdigest()==expected, 'Native settings controls changed; customization refused'
-native_imports = '''import {_S as GatewayRow,lS as GatewayGroup,GT as GatewayDropdown,qT as GatewayMenu,Ck as GatewayButton,IT as GatewayDialog,OT as GatewayDialogContent,jT as GatewayDialogHeader,kT as GatewayDialogFooter,AT as GatewayDialogHeading,zT as GatewayDialogTitle,RT as GatewayDialogSubtitle} from "./app-shared-737655e1fb23.js";
-import {MA as GatewayDropdownButton,lEn as GatewayInput,YA as GatewaySettingsPage,irt as GatewayDirtySettings,ert as gatewayInitializeDirtySettings} from "./app-initial-b8e1c8014bb4.js";
+native_imports = '''import {_S as GatewayRow,lS as GatewayGroup,$T as GatewaySwitch,GT as GatewayDropdown,qT as GatewayMenu,Ck as GatewayButton,IT as GatewayDialog,OT as GatewayDialogContent,jT as GatewayDialogHeader,kT as GatewayDialogFooter,AT as GatewayDialogHeading,zT as GatewayDialogTitle,RT as GatewayDialogSubtitle} from "./app-shared-737655e1fb23.js";
+import {MA as GatewayDropdownButton,lEn as GatewayInput,Met as GatewaySearch,Net as gatewayInitializeSearch,YA as GatewaySettingsPage,irt as GatewayDirtySettings,ert as gatewayInitializeDirtySettings} from "./app-initial-b8e1c8014bb4.js";
 import {s as gatewayInitializeSettingsControls} from "./general-settings-161845fad443.js";
 '''
 settings_source = native_imports + settings_source
 group_marker = ':n.map(e=>(0,Q.jsxs)(tt,{title:'
 item_marker = 'e.sections.map(e=>{if(e.slug===`teams`'
 assert settings_source.count(group_marker) == settings_source.count(item_marker) == 1
-sections = [{'slug':'better-codex-' + slug, 'label':label} for slug,label in [('providers','Providers'),('keys','API keys'),('models','Models')]]
+sections = [{'slug':'better-codex-' + slug, 'label':label} for slug,label in [('providers','Providers'),('models','Models')]]
 group = {'key':'better-codex','heading':{'id':'betterCodex.settings','defaultMessage':'Better Codex'},'sections':sections}
 settings_source = settings_source.replace(group_marker,':([...n,' + json.dumps(group) + ']).map(e=>(0,Q.jsxs)(tt,{title:',1)
 settings_source = settings_source.replace(item_marker,'e.sections.map(e=>{if(e.slug.startsWith(`better-codex-`))return(0,Q.jsx)(vt,{label:e.label,"aria-label":e.label,"data-settings-panel-slug":e.slug,isActive:a===e.slug,hideLabel:S?j:void 0,weightClassName:`font-normal`,onClick:()=>o(e.slug)},e.slug);if(e.slug===`teams`',1)
@@ -124,14 +125,14 @@ replacements = {
     'let y=v,b=ne(f)': '(0,li.useEffect)(()=>gatewaySetSelection(null),[u.pathname,u.search]);let y=v,b=ne(f)',
     'let Ke=h==null?We:`plugins-settings`': 'let Ke=gatewaySelection?.slug??(h==null?We:`plugins-settings`)',
     'onSelect:qe,onSelectPlugin:U,onSelectTeam:Le': 'onSelect:(slug,...args)=>{if(slug.startsWith(`better-codex-`)){F(()=>gatewaySetSelection({slug,provider:null}))}else{gatewaySetSelection(null);qe(slug,...args)}},onSelectPlugin:(...args)=>{gatewaySetSelection(null);U(...args)},onSelectTeam:(...args)=>{gatewaySetSelection(null);Le(...args)}',
-    'let W=`${u.key}:${de?.navigationKey??0}`': 'if(gatewaySelection)Pe=(0,$.jsx)(globalThis.gatewaySettingsComponent,{section:gatewaySelection.slug.slice(13),provider:gatewaySelection.provider,onClose:()=>F(()=>gatewaySetSelection(null))},gatewaySelection.slug);let W=`${u.key}:${de?.navigationKey??0}`',
+    'let W=`${u.key}:${de?.navigationKey??0}`': 'if(gatewaySelection)Pe=(0,$.jsx)(globalThis.gatewaySettingsComponent,{section:gatewaySelection.slug.slice(13),provider:gatewaySelection.provider},gatewaySelection.slug);let W=`${u.key}:${de?.navigationKey??0}`',
 }
 for before, after in replacements.items():
     assert settings_source.count(before) == 1, 'Known settings layout changed; customization refused'
     settings_source = settings_source.replace(before,after,1)
 initializer='ui();export{ri as SettingsPage};'
 assert settings_source.count(initializer)==1
-settings_source=settings_source.replace(initializer,'ui();gatewayInitializeSettingsControls();gatewayInitializeDirtySettings();\n'+(ROOT/'src/ui/api-settings.js').read_text(encoding='utf-8')+'\nexport{ri as SettingsPage};',1)
+settings_source=settings_source.replace(initializer,'ui();gatewayInitializeSettingsControls();gatewayInitializeDirtySettings();gatewayInitializeSearch();\n'+(ROOT/'src/ui/api-settings.js').read_text(encoding='utf-8')+'\nexport{ri as SettingsPage};',1)
 # Only known source types are copied; keys, state and vendor files stay local.
 for source_dir, target_dir, suffixes in (
     (ROOT / 'src/desktop', DEPLOY, {'.py'}),
@@ -156,8 +157,12 @@ overlay['additional_assets'] = [{'filename':settings_name,'original_source_sha25
     'source_file':'Better-Codex-Settings.source.js','overlay_source_sha256':hashlib.sha256(settings_source.encode()).hexdigest()}]
 (DEPLOY / 'Provider-Overlay.json').write_text(json.dumps(overlay,indent=2))
 checks = {}
+vendor=DEPLOY/'support/opencode-runtime/config/opencode/node_modules'
+if not vendor.is_dir():raise RuntimeError('Verified engine dependencies must be staged for a runtime build')
+vendor_checks={p.relative_to(vendor).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(vendor.rglob('*')) if p.is_file()}
+(DEPLOY/'Vendor-Checksums.json').write_text(json.dumps(vendor_checks),encoding='utf8')
 for path in sorted(DEPLOY.iterdir()):
-    if path.suffix in {'.py','.ps1','.cmd','.js'} or path.name in {'Deployment.json','Provider-Overlay.json','models.json','providers.json','instructions.json'}:
+    if path.suffix in {'.py','.ps1','.cmd','.js'} or path.name in {'Deployment.json','Provider-Overlay.json','models.json','providers.json','instructions.json','Vendor-Checksums.json'}:
         checks[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
 for directory in ('gateway','opencode-engine'):
     for path in sorted((DEPLOY / directory).iterdir()):

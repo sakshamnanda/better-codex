@@ -3,7 +3,11 @@
 globalThis.gatewayUpdateProviderConfig = value => {
   gatewayProviderConfig.providers=value.providers;
   gatewayProviderConfig.models=value.models;
+  gatewayProviderConfig.disabledModels=value.disabledModels??[];
 };
+function gatewayPickerModelDisabled(option) {
+  return (gatewayProviderConfig.disabledModels??[]).some(id=>option.id===id||option.id?.startsWith(id+`:`));
+}
 function gatewayPickerOptionProvider(option) {
   const id = option.id ?? ``;
   for (const model of Object.keys(gatewayProviderConfig.models).sort((a, b) => b.length - a.length)) {
@@ -18,9 +22,9 @@ function gatewayPickerMenuProps(props) {
   const previousModels = React.useRef({});
   React.useEffect(() => { if (!props.active) setError(null); }, [props.active]);
   const menu = props.modelListConfig;
-  const options = menu.options ?? [];
+  const options = (menu.options ?? []).filter(option=>!gatewayPickerModelDisabled(option));
   const hasExternal = options.some(option => gatewayPickerOptionProvider(option) !== `openai`);
-  if (!hasExternal) return props;
+  if (!hasExternal&&!gatewayProviderConfig.providers.some(provider=>provider.id!==`openai`)) return props;
   const selected = options.find(option => option.selected);
   const selectedModel = props.selectedPowerSelection?.model;
   const choice = selectedModel != null ? gatewayPickerOptionProvider({id:selectedModel}) : gatewayPickerOptionProvider(selected ?? {});
@@ -28,6 +32,7 @@ function gatewayPickerMenuProps(props) {
   async function selectProvider(provider, event) {
     event.preventDefault();
     if (busy || props.modelSelectionDisabled || provider === choice) return;
+    if(gatewayProviderConfig.providers.find(entry=>entry.id===provider)?.enabled===false)return;
     const candidates = options.filter(option => !option.disabled && gatewayPickerOptionProvider(option) === provider);
     const target = candidates.find(option => option.id === previousModels.current[provider])
       ?? candidates.find(option => { const id = gatewayProviderConfig.providers.find(entry => entry.id === provider)?.defaultModel; return id && (option.id === id || option.id.startsWith(id + `:`)); })
@@ -53,21 +58,21 @@ function gatewayPickerMenuProps(props) {
       role: `menuitemradio`,
       "aria-checked": choice === provider.id,
       RightIcon: choice === provider.id ? wn : undefined,
-      disabled: busy || props.modelSelectionDisabled || !options.some(option => !option.disabled && gatewayPickerOptionProvider(option) === provider.id),
-      SubText: provider.description ? (0, CU.jsx)(`span`, { className: `text-codex-description`, children: provider.description }) : null,
+      disabled: busy || props.modelSelectionDisabled || provider.enabled===false || !options.some(option => !option.disabled && gatewayPickerOptionProvider(option) === provider.id),
+      SubText: provider.enabled===false?(0,CU.jsx)(`span`,{className:`text-codex-description`,children:`Disabled in Better Codex`}):provider.description ? (0, CU.jsx)(`span`, { className: `text-codex-description`, children: provider.description }) : null,
       onSelect: event => { void selectProvider(provider.id, event); },
       children: provider.label,
     }, provider.id)),
     error ? (0, CU.jsx)(mh.Item, {disabled:true, subTextAllowWrap:true, children:error}) : null,
     (0, CU.jsx)(mh.Separator, {}),
     (0, CU.jsx)(mh.Title, { children: `Better Codex` }),
-    ...[[`providers`,`Providers`],[`keys`,`API keys`],[`models`,`Models`]].map(([section,label]) =>
+    ...[[`providers`,`Providers`],[`models`,`Models`]].map(([section,label]) =>
       (0, CU.jsx)(mh.Item, {onSelect:() => { void globalThis.gatewaySettingsOpen(section); }, children:label}, `better-codex-` + section)),
     (0, CU.jsx)(mh.Separator, {}),
   ] });
   return { ...props, menuHeader: header,
     modelListConfig: { ...menu,
-      options: options.filter(option => gatewayPickerOptionProvider(option) === choice),
+      options: options.filter(option => gatewayPickerOptionProvider(option) === choice && gatewayProviderConfig.providers.find(p=>p.id===choice)?.enabled!==false),
       defaultOption: choice === `openai` ? menu.defaultOption : null,
       extras: choice === `openai` ? menu.extras : null,
     },

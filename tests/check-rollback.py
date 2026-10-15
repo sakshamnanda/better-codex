@@ -27,6 +27,16 @@ try: transaction.rollback(state); raise AssertionError('Competing key overwritte
 except RuntimeError: pass
 print('PASS: exact restoration, unrelated edits preserved, separately changed managed keys refused.')
 
+# Dynamic discovery removes only the managed static catalog override and
+# restores an existing user catalog plus unrelated preferences on close.
+dynamic_original=b'model="gpt-6.1-sol"\nmodel_catalog_json="owned-user-catalog.json"\n[features]\nmulti_agent=true\n'
+config.write_bytes(dynamic_original)
+transaction.activate(config,'http://127.0.0.1:12345/g/fixture/backend-api/codex',None,backups,state)
+assert 'model_catalog_json' not in tomllib.loads(config.read_text())
+config.write_text('owned_preference=true\n'+config.read_text())
+transaction.rollback(state)
+assert tomllib.loads(config.read_text())=={**tomllib.loads(dynamic_original.decode()),'owned_preference':True}
+
 # Exercise the actual builder guard with our own PID and isolated public state.
 guarded = scratch / 'guarded-deployment'
 (guarded / 'support').mkdir(parents=True)

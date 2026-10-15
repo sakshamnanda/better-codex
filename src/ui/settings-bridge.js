@@ -16,6 +16,7 @@
     globalThis.betterCodexSettings(JSON.stringify({id,request:value}));
   });
   globalThis.gatewaySettingsOpen = (section = `providers`, provider = null) => {
+    if(section===`keys`)section=`providers`;
     if (typeof globalThis.gatewaySettingsNavigate === `function`) {
       globalThis.gatewaySettingsNavigate(section,provider);
     } else {
@@ -28,8 +29,9 @@
   if (typeof globalThis.betterCodexSettings === `function`) {
     globalThis.gatewaySettingsRequest({action:`get`}).then(snapshot=>{
       globalThis.gatewayUpdateProviderConfig?.({providers:[{id:`openai`,label:`ChatGPT`},
-        ...Object.entries(snapshot.providers).map(([id,p])=>({id,label:p.label,defaultModel:p.default_model}))],
-        models:Object.fromEntries(snapshot.models.map(m=>[m.id,m.provider]))});
+        ...Object.entries(snapshot.providers).map(([id,p])=>({id,label:p.label,defaultModel:p.default_model,enabled:p.enabled!==false}))],
+        models:Object.fromEntries(snapshot.models.map(m=>[m.id,m.provider])),
+        disabledModels:snapshot.models.filter(m=>m.enabled===false).map(m=>m.id)});
     }).catch(()=>{});
   }
 })();

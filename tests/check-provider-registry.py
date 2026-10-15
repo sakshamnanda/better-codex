@@ -44,7 +44,7 @@ providers = json.loads((root / 'config/providers.json').read_text())
 catalog = json.loads((root / 'config/models.json').read_text())
 model = copy.deepcopy(next(model for model in catalog['models'] if model['slug'] == 'nvidia/nemotron-3-ultra-550b-a55b:free'))
 model.update(slug='fixture/text-model', display_name='Fixture Text Model',default_reasoning_level='high',
-    supported_reasoning_levels=[{'effort':'high','description':'Owned high-effort fixture'}])
+    supported_reasoning_levels=[{'effort':'high','description':'Owned high-effort fixture'}],better_codex_provider='fixture',better_codex_removed=False)
 catalog['models'].append(model)
 providers['fixture'] = {'label': 'Fixture Provider', 'adapter': 'responses', 'endpoint': 'https://provider.example/v1/responses', 'default_model': model['slug'], 'models': {model['slug']: {'output_limit': 2048}}}
 (directory / 'models.json').write_text(json.dumps(catalog))

@@ -27,9 +27,10 @@ def activate(config_path,base_url,catalog_path,backup_directory,state_path):
     original = config_path.read_bytes()
     parsed = tomllib.loads(original.decode('utf-8-sig'))
     if parsed.get('model_provider','openai') != 'openai': raise RuntimeError('The original provider must remain ChatGPT/OpenAI')
-    values = {'openai_base_url':base_url,'model_catalog_json':str(catalog_path)}
+    values = {'openai_base_url':base_url}
+    if catalog_path is not None:values['model_catalog_json']=str(catalog_path)
     updated = managed_text(original.decode('utf-8-sig'),values).encode()
-    expected = parsed | values
+    expected = {key:value for key,value in parsed.items() if key not in KEYS} | values
     if tomllib.loads(updated.decode()) != expected: raise RuntimeError('Configuration merge altered unrelated settings')
     backup_directory = Path(backup_directory)
     backup_directory.mkdir(exist_ok=True)
@@ -59,7 +60,7 @@ def rollback(state_path):
         restored = original
     else:
         parsed = tomllib.loads(current.decode('utf-8-sig'))
-        if any(parsed.get(key) != value for key,value in state['managed_values'].items()):
+        if any(parsed.get(key) != state['managed_values'].get(key) for key in KEYS):
             raise RuntimeError('Managed keys were changed separately; refusing to overwrite them. Original backup is preserved.')
         old = tomllib.loads(original.decode('utf-8-sig'))
         restored = managed_text(current.decode('utf-8-sig'),{key:old[key] for key in KEYS if key in old}).encode()

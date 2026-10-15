@@ -91,7 +91,7 @@ out={'max_output_tokens':1200000};limit_output(out,auto);assert out['max_output_
 out={};limit_output(out,{'output_limit':4096});assert out['max_output_tokens']==4096
 assert meta.entry_metadata({'reasoning':{'effort_values':['low','high'],'default_effort':'high'}})['default_effort']=='high'
 
-# Settings saves must re-fetch automatic values, reject missing metadata before
+# New models use trusted fetched values, reject missing metadata before
 # writes and retain the original source/next launch when staging fails.
 project=scratch/'project';folder=project/'config';folder.mkdir(parents=True)
 import shutil
@@ -100,7 +100,8 @@ shutil.copytree(root/'config/instructions',folder/'instructions')
 old=project/'.local/deployment-old';(old/'gateway/keys').mkdir(parents=True)
 (project/'.local/deployment-path.txt').write_text('.local/deployment-old')
 settings=object.__new__(Settings);settings.project=project;settings.deployment=old;settings.lock=threading.Lock()
-settings.fetch_metadata=lambda *args:a
+metadata_calls=[]
+settings.fetch_metadata=lambda *args:metadata_calls.append(True) or a
 snapshot=settings.snapshot();originals={name:(folder/name).read_bytes() for name in ('providers.json','models.json')}
 assert settings.handle({'action':'metadata','revision':snapshot['revision'],'provider':'openrouter','model':'@preset/fixed'})==a
 def stage(keys):
@@ -111,8 +112,10 @@ settings.stage=stage
 spoof=copy.deepcopy(request);spoof['models'][-1].update(context=1000000,output=4096)
 try:settings.handle({'action':'save','revision':snapshot['revision'],**spoof,'keys':{}});raise AssertionError('Failure not returned')
 except ValueError as error:assert str(error)=='owned staging failure'
+assert metadata_calls==[True], 'Save duplicated the explicit new-model metadata fetch'
 assert all((folder/name).read_bytes()==value for name,value in originals.items())
 settings.fetch_metadata=lambda *args:{**a,'context':None}
+settings.metadata_cache.clear()
 try:settings.handle({'action':'save','revision':snapshot['revision'],**request,'keys':{}});raise AssertionError('Unknown limit guessed')
 except ValueError as error:assert 'incomplete' in str(error)
 assert all((folder/name).read_bytes()==value for name,value in originals.items())

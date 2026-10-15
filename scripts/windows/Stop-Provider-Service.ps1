@@ -8,11 +8,17 @@ if ($helper) {
     $scripts = @((Join-Path $setupRoot 'provider_service.py'),(Join-Path $setupRoot 'launcher.py'),(Join-Path $setupRoot 'packaged_launcher.py'))
     if (!($scripts | Where-Object { $helper.CommandLine.Contains('"' + $_ + '"') })) { throw 'Recorded process no longer matches this provider helper; refusing to stop it' }
 }
-$engine = $null
-if ($state.opencode_pid) { $engine = Get-CimInstance Win32_Process -Filter "ProcessId = $($state.opencode_pid)" }
-if ($engine) {
-    if ($engine.ExecutablePath -ne (Join-Path $setupRoot 'opencode-engine\opencode.exe') -or $engine.ParentProcessId -ne $state.helper_pid) { throw 'Recorded engine no longer matches the owned helper' }
-    Stop-Process -Id $engine.ProcessId -ErrorAction SilentlyContinue
+$engines = @()
+$engineIds = @($state.opencode_pids) + @($state.opencode_pid) | Where-Object { $null -ne $_ } | Select-Object -Unique
+foreach ($engineId in $engineIds) {
+    $engine = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$engineId)"
+    if (!$engine) { continue }
+    if ($engine.ExecutablePath -ne (Join-Path $setupRoot 'opencode-engine\opencode.exe') -or $engine.ParentProcessId -ne $state.helper_pid) {
+        if ($engineId -eq $state.opencode_pid) { throw 'Recorded engine no longer matches the owned helper' }
+        continue # A retired PID may have been reused; leave unrelated processes alone.
+    }
+    $engines += $engine
 }
+foreach ($engine in $engines) { Stop-Process -Id $engine.ProcessId -ErrorAction SilentlyContinue }
 if ($helper) { Stop-Process -Id $helper.ProcessId -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $statePath

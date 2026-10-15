@@ -1,5 +1,6 @@
 """Official OpenCode server as an isolated, tool-disabled inference backend."""
 import base64
+import copy
 import fnmatch
 import hashlib
 import json
@@ -21,11 +22,44 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class OpenCodeEngine:
+    verified_dependencies=set()
+    dependency_lock=threading.Lock()
+
+    def dependency_entry(self):
+        """Reuse the pinned vendor tree; per-engine writable state stays isolated."""
+        manifest=self.executable_root/'Vendor-Checksums.json'
+        raw=manifest.read_bytes();digest=hashlib.sha256(raw).hexdigest()
+        checks=json.loads((self.executable_root/'Helper-Checksums.json').read_text())
+        if checks.get('Vendor-Checksums.json')!=digest:raise GatewayError('Shared runtime dependency manifest changed',502)
+        folder=self.executable_root/'support/opencode-runtime/config/opencode/node_modules'
+        identity=(str(self.executable_root.resolve()),digest)
+        with self.dependency_lock:
+            if identity not in self.verified_dependencies:
+                files=json.loads(raw)
+                if not isinstance(files,dict) or '@opencode-ai/plugin/dist/index.js' not in files:raise GatewayError('Shared runtime dependencies are unavailable',502)
+                for name,expected in files.items():
+                    path=(folder/name).resolve()
+                    if not path.is_relative_to(folder.resolve()) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=expected:
+                        raise GatewayError('Shared runtime dependency verification failed',502)
+                self.verified_dependencies.add(identity)
+        return folder/'@opencode-ai/plugin/dist/index.js'
+
+    def link_dependencies(self,directory,shared):
+        """One NTFS directory reference; never copy or modify vendor contents."""
+        link=directory/'node_modules'
+        if link.exists():
+            if link.resolve()!=shared.resolve():raise GatewayError('Engine dependency path changed',502)
+            return
+        values=[str(link),str(shared)]
+        if any(any(c in value for c in '\r\n"%!&|<>^()') for value in values):raise GatewayError('Unsupported runtime dependency path',502)
+        result=subprocess.run([os.environ['COMSPEC'],'/d','/c','mklink','/J',*values],capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode or link.resolve()!=shared.resolve():raise GatewayError('Could not reference verified runtime dependencies',502)
+
     def __init__(self, key_supplier, root=None, registry=None, executable_root=None):
         self.key_supplier = key_supplier
         self.root=Path(root) if root is not None else ROOT
         self.executable_root=Path(executable_root) if executable_root is not None else self.root
-        self.providers,self.models=registry if registry is not None else (PROVIDERS,MODELS)
+        self.providers,self.models=copy.deepcopy(registry if registry is not None else (PROVIDERS,MODELS))
         self.process = None
         self.directory = self.root / "support/opencode-runtime"
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -33,8 +67,13 @@ class OpenCodeEngine:
     def start(self, mock_url=None, caller_tools=False):
         exe = self.executable_root / "opencode-engine/opencode.exe"
         manifest = json.loads((exe.parent / "Verification.json").read_text())
-        assert hashlib.sha256(exe.read_bytes()).hexdigest() == manifest["executable_sha256"]
-        self.directory.mkdir(exist_ok=True)
+        checks=json.loads((self.executable_root/'Helper-Checksums.json').read_text())
+        if hashlib.sha256((exe.parent/'Verification.json').read_bytes()).hexdigest()!=checks['opencode-engine/Verification.json']:
+            raise GatewayError('Verified engine identity changed',502)
+        digest=hashlib.sha256(exe.read_bytes()).hexdigest()
+        if digest!=manifest['executable_sha256'] or digest!=checks['opencode-engine/opencode.exe']:
+            raise GatewayError('Verified engine executable changed',502)
+        self.directory.mkdir(parents=True,exist_ok=True)
         inference = self.directory / "inference"
         inference.mkdir(exist_ok=True)
         environment = {key: os.environ[key] for key in ("SystemRoot", "WINDIR", "PATH", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "COMSPEC") if key in os.environ}
@@ -62,9 +101,23 @@ class OpenCodeEngine:
             plugins = dependencies / "plugins"
             plugins.mkdir(exist_ok=True)
             plugin = plugins / "codex-relay.ts"
-            plugin.write_text((self.root / "gateway/codex-relay.ts").read_text(encoding="utf-8"), encoding="utf-8")
+            raw_source=(self.executable_root/'gateway/codex-relay.ts').read_bytes()
+            if hashlib.sha256(raw_source).hexdigest()!=checks['gateway/codex-relay.ts']:
+                raise GatewayError('Caller relay source changed',502)
+            source=raw_source.decode('utf8')
+            marker='from "@opencode-ai/plugin"'
+            if source.count(marker)!=1:raise GatewayError('Caller relay dependency binding changed',502)
+            entry=self.dependency_entry()
+            source=source.replace(marker,'from '+json.dumps(entry.as_uri()),1)
+            plugin.write_text(source,encoding='utf8')
             config["plugin"] = [plugin.as_uri()]
-            (dependencies / "package.json").write_text(json.dumps({"dependencies": {"@opencode-ai/plugin": "1.18.35"}}))
+            self.link_dependencies(dependencies,self.executable_root/'support/opencode-runtime/config/opencode/node_modules')
+            pinned={'@opencode-ai/plugin':'1.18.35'}
+            (dependencies/'package.json').write_text(json.dumps({'dependencies':pinned}))
+            # The verified vendor manifest pins all transitive files. This
+            # root lock tells the client its API is already installed, so it
+            # does not reinstall packages into shared vendor assets.
+            (dependencies/'package-lock.json').write_text(json.dumps({'name':'better-codex-engine','lockfileVersion':3,'packages':{'':{'dependencies':pinned}}}))
             environment["BUN_INSTALL_CACHE_DIR"] = str(self.directory / "cache/bun")
             environment["NPM_CONFIG_CACHE"] = str(self.directory / "cache/npm")
         self.caller_tools = caller_tools

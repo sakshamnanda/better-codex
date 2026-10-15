@@ -55,6 +55,10 @@ if ($Mode -eq 'SaveProfiles') {
             if ($item.Name -notin @($entries.Id)) { throw 'Invalid provider' }
             $entry = $item.Value
             $profiles = @($entry.profiles)
+            $clear = @($entry.clear)
+            if ($null -eq $entry.clear) { $clear = @() }
+            if ($clear.Count -gt 16) { throw 'Invalid deletion count' }
+            foreach ($profileId in $clear) { [void](Get-ProfileKeyPath $item.Name $profileId) }
             if ($profiles.Count -lt 1 -or $profiles.Count -gt 16) { throw 'Invalid profile count' }
             $labels = @{}; $names = @{}
             foreach ($profile in $profiles) {
@@ -67,16 +71,24 @@ if ($Mode -eq 'SaveProfiles') {
                 if ($profile.key.Trim().Length -eq 0 -and -not (Test-Path -LiteralPath $path) -and $profile.id -ne 'default') { throw 'New profile key required' }
             }
             if (-not $names.ContainsKey($entry.active)) { throw 'Active profile missing' }
+            foreach ($profileId in $clear) {
+                if ($names.ContainsKey($profileId) -and -not ($profileId -eq 'default' -and $profiles.Count -eq 1 -and $profiles[0].key -eq '')) { throw 'Cannot delete a retained profile' }
+            }
             $oldEntry = $index.providers[$item.Name]
             if ($null -ne $oldEntry) {
                 foreach ($oldProfile in $oldEntry.profiles.PSObject.Properties) {
-                    if (-not $names.ContainsKey($oldProfile.Name)) { throw 'Keep existing profiles' }
+                    if (-not $names.ContainsKey($oldProfile.Name) -and $oldProfile.Name -notin $clear) { throw 'Explicit profile deletion required' }
                 }
-            } elseif ((Test-Path -LiteralPath (Get-ProfileKeyPath $item.Name 'default')) -and -not $names.ContainsKey('default')) { throw 'Keep the saved default key' }
+            } elseif ((Test-Path -LiteralPath (Get-ProfileKeyPath $item.Name 'default')) -and -not $names.ContainsKey('default') -and 'default' -notin $clear) { throw 'Explicit default deletion required' }
             $index.providers[$item.Name] = @{active=$entry.active;profiles=$names}
         }
         New-Item -ItemType Directory -Path $keyDirectory -Force | Out-Null
         foreach ($item in $values.PSObject.Properties) {
+            foreach ($profileId in @($item.Value.clear)) {
+                if ($null -eq $profileId) { continue }
+                $path = Get-ProfileKeyPath $item.Name $profileId
+                if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+            }
             foreach ($profile in @($item.Value.profiles)) {
                 $plainText = $profile.key.Trim()
                 if ($plainText.Length -eq 0) { continue }

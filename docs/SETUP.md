@@ -4,7 +4,7 @@ The live app was confirmed working on 2026-10-11 with provider categories and ef
 
 ## Launch and rollback
 
-`scripts/Launch.cmd` invokes Windows PowerShell's registered-package command launcher. Its helper verifies package identity, installed/helper hashes and the original UI source. It starts a loopback provider gateway, backs up the current configuration, changes only `openai_base_url` and `model_catalog_json`, then launches the unchanged signed app with private pipes.
+`scripts/Launch.cmd` invokes Windows PowerShell's registered-package command launcher. Its helper verifies package identity, installed/helper hashes and the original UI source. It starts a loopback provider gateway, backs up the current configuration, manages only `openai_base_url` and the removal of a startup-only `model_catalog_json` override, then launches the unchanged signed app with private pipes. Dynamic model metadata enables automatic saves followed by Refresh models, with a UI reload and no backend restart. Original settings and owned metadata-cache changes are restored on close.
 
 The UI update uses the actual asset URL, tolerates query strings, and temporarily bypasses that target's resource cache/service worker. Normal handling is restored afterward. A category timeout keeps the native window/provider service open rather than forcing a quit.
 
@@ -15,6 +15,10 @@ The UI update uses the actual asset URL, tolerates query strings, and temporaril
 The project contains an ignored, verified copy of the official OpenCode engine and its pinned plugin dependency, encrypted provider key files, and private configuration backups. Fresh runtime state is created on first project-based launch. Active leases, browser/account profiles and databases were not copied from the old deployment.
 
 Active deployments are retained while their session runs. Their settings backups and key lookups use their existing paths. The next desktop-shortcut launch uses the folder selected by `.local/deployment-path.txt`. A staged replacement contains a fresh runtime state and takes its own configuration backup after the old app closes. Do not run old and new provider launches concurrently.
+
+Ordinary settings edits use separate, small `.local/settings-*` snapshots selected by `.local/settings-path.txt`. They reuse the already verified runtime, executable and vendor files; they do not rebuild the UI or copy the engine/dependency tree. Startup verifies the full runtime before opening the saved settings snapshot. Key-only changes need no renderer reload. Model catalog changes use Refresh models; new model discovery or explicit Refresh metadata may still wait for the provider, and an OpenCode active-key/model change may prepare a replacement isolated engine.
+
+A verified helper-code update may be queued in `.local/pending-deployment.txt` without changing the live settings selection. The project shortcut consumes it only on a normal launch after the app and its background backend have closed. It verifies the new helper and checks that provider/model settings, instruction files and encrypted keys still match the staged copy. Newer settings win: a stale queued update is discarded while the existing selection is retained. Rollback cancels a queued code update. This never closes or automatically relaunches a running app.
 
 ## Provider details and limits
 

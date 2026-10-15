@@ -38,8 +38,8 @@ PROJECT_WORKFLOW = (
 )
 
 
-def current_route_instructions(model, provider):
-    label = PROVIDERS[provider]["label"]
+def current_route_instructions(model, provider, providers=None):
+    label = (PROVIDERS if providers is None else providers)[provider]["label"]
     return (
         "\n\nCurrent inference facts supplied by the local desktop gateway for this request:\n"
         + "Configured model ID: " + model + ". Provider: " + label + ".\n"
@@ -340,13 +340,14 @@ class PreparedRequest:
 
 
 class GatewayCore:
-    def __init__(self, capability, port, native_models, key_supplier):
+    def __init__(self, capability, port, native_models, key_supplier, registry=None):
         if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", capability) or not 0 < port < 65536:
             raise ValueError("Invalid local gateway boundary")
         self.prefix = "/g/" + capability
         self.host = f"127.0.0.1:{port}"
         self.native_models = frozenset(native_models)
         self.key_supplier = key_supplier
+        self.providers,self.models,self.external=registry if registry is not None else (PROVIDERS,MODELS,EXTERNAL)
 
     def prepare(self, method, target, header_pairs, body=b""):
         headers = {}
@@ -382,15 +383,23 @@ class GatewayCore:
         if not isinstance(payload, dict) or not isinstance(payload.get("model"), str):
             raise GatewayError("Responses model is required")
         model = payload["model"]
-        if model in self.native_models and model not in EXTERNAL:
+        if model in self.native_models and model not in self.external:
             return self.native(headers, body, path, parsed.query, "responses")
-        if model not in EXTERNAL:
+        if model not in self.external:
+            if any(not p.get('enabled',True) and model in p['models'] for p in self.providers.values()):
+                raise GatewayError('This provider is disabled. Enable it in Better Codex or choose another model.',422)
+            if any(model in p['models'] and not p['models'][model].get('enabled',True) for p in self.providers.values()):
+                raise GatewayError('This model is disabled. Enable it in Better Codex or choose another model.',422)
             raise GatewayError("Model is outside the configured allowlist", 422)
         if parsed.query:
             raise GatewayError("Third-party Responses query parameters are not supported", 422)
         if payload.get("previous_response_id") is not None:
             raise GatewayError("Third-party routes require complete stateless history", 422)
-        provider, url, default_effort, levels = EXTERNAL[model]
+        provider, url, default_effort, levels = self.external[model]
+        if not self.providers[provider].get('enabled',True):
+            raise GatewayError('This provider is disabled. Enable it in Better Codex or choose another model.',422)
+        if not self.providers[provider]['models'].get(model,{}).get('enabled',True):
+            raise GatewayError('This model is disabled. Enable it in Better Codex or choose another model.',422)
         history = payload.get('input')
         discoveries = [item['tools'] for item in history if isinstance(item, dict) and item.get('type') in {'tool_search_output','additional_tools'} and item.get('status') in {None, 'completed'} and isinstance(item.get('tools'), list)] if isinstance(history, list) else []
         names = ToolNames(payload.get("tools", []), discoveries)
@@ -408,8 +417,8 @@ class GatewayCore:
             raise GatewayError("Instructions must be text", 422)
         if PROJECT_WORKFLOW not in instructions:
             instructions += PROJECT_WORKFLOW
-        forwarded["instructions"] = instructions + current_route_instructions(model, provider) + names.delegation_guidance()
-        if MODELS.get(model,{}).get('reasoning_mode')=='provider_default':
+        forwarded["instructions"] = instructions + current_route_instructions(model, provider, self.providers) + names.delegation_guidance()
+        if self.models.get(model,{}).get('reasoning_mode')=='provider_default':
             forwarded.pop('reasoning',None)
         elif isinstance(forwarded.get("reasoning"), dict):
             reasoning = dict(forwarded["reasoning"])

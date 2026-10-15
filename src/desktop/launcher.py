@@ -88,9 +88,11 @@ def main():
     pipe = None
     try:
         service = Service()
-        service.start()
         config = Path(os.environ['USERPROFILE']) / '.codex/config.toml'
-        activate(config,service.base_url,ROOT / 'models.json',ROOT / 'backups',TRANSACTION)
+        service.start(config.parent)
+        # Dynamic discovery lets the same backend reload verified model metadata.
+        # A static model_catalog_json builds an immutable manager at startup.
+        activate(config,service.base_url,None,ROOT / 'backups',TRANSACTION)
         environment = {key:os.environ[key] for key in ('SystemRoot','WINDIR','PATH','PATHEXT','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','COMSPEC','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE') if key in os.environ}
         environment['CODEX_HOME'] = str(config.parent)
         environment['CODEX_CLI_PATH'] = str(Path(deployment['source_app']) / 'resources/codex.exe')
@@ -106,7 +108,7 @@ def main():
             if hashlib.sha256(text.encode()).hexdigest() != asset['overlay_source_sha256']: raise RuntimeError('Settings UI source verification failed')
             additional.append((asset['filename'],asset['original_source_sha256'],text))
         from api_settings import Settings
-        settings = Settings(ROOT,service.apply_settings)
+        settings = Settings(ROOT,service.apply_settings,service.refresh_catalog,lambda:service.current)
         ui_applied = pipe.patch(overlay['filename'],overlay['original_source_sha256'],source,SUPPORT / 'Live-Overlay-Check.json',additional,settings.handle)
         state = json.loads((SUPPORT / 'Gateway-State.json').read_text())
         state.update(app_pid=child.pid,mode='installed_signed_app',package_files_replaced=False)

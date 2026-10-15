@@ -110,11 +110,11 @@ def public_relay_error(body):
     return detail[1] if detail else None
 
 
-def key_supplier(provider):
+def key_supplier(provider,storage=None):
     powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-         str(HERE / "Provider-Credentials.ps1"), "-Mode", "Token", "-Provider", provider,'-Storage',str(KEY_STORAGE)],
+         str(HERE / "Provider-Credentials.ps1"), "-Mode", "Token", "-Provider", provider,'-Storage',str(KEY_STORAGE if storage is None else storage)],
         capture_output=True, text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW,
     )
     if result.returncode:
@@ -230,6 +230,15 @@ class RealGateway(RelayBase):
         prefix=getattr(self.server,'prefix',None)
         if prefix and self.path!=prefix+'/backend-api/codex/responses':
             self.fail(404);return
+        generations=getattr(self.server,'settings_generations',None)
+        if generations:
+            if not self.allowed():self.fail(403);return
+            token=self.headers.get('X-Better-Codex-Generation')
+            if not token:self.fail(403);return
+            try:
+                with generations.request(token) as (_,self.runtime_settings):RealGateway._post(self)
+            except ValueError:self.fail(403)
+            return
         gate=getattr(self.server,'reload_gate',None)
         with gate.request(continuation=True) if gate else nullcontext():RealGateway._post(self)
 
@@ -251,14 +260,18 @@ class RealGateway(RelayBase):
             if incoming.get("model") in BLOCKED_MODELS:
                 raise GatewayError(BLOCKED_MODELS[incoming["model"]], 403)
             capability = "provider_test_capability_12345678901234567890"
-            core = GatewayCore(capability, self.server.server_port, set(), key_supplier)
+            settings=getattr(self,'runtime_settings',None)
+            providers,models,_=settings.registry if settings else (PROVIDERS,MODELS,None)
+            supplier=(lambda provider:key_supplier(provider,storage=settings.key_storage)) if settings else key_supplier
+            core = GatewayCore(capability, self.server.server_port, set(), supplier,registry=settings.registry if settings else None)
             prepared = core.prepare("POST", core.prefix + "/backend-api/codex/responses",
                                     list(self.headers.items()), body)
             outgoing = json.loads(prepared.body)
-            if outgoing["model"] not in {entry["slug"] for entry in self.server.catalog["models"]}:
+            catalog=settings.catalog if settings else self.server.catalog
+            if outgoing["model"] not in {entry["slug"] for entry in catalog["models"]}:
                 raise GatewayError("Model is outside this test's selected catalog", 422)
-            limit_output(outgoing,MODELS[outgoing['model']])
-            adapter = PROVIDERS[prepared.provider]["adapter"]
+            limit_output(outgoing,models[outgoing['model']])
+            adapter = providers[prepared.provider]["adapter"]
             chat = adapter == "chat_completions"
             body = json.dumps(prepare_chat(outgoing) if chat else outgoing).encode()
             from dataclasses import replace
@@ -273,7 +286,7 @@ class RealGateway(RelayBase):
                      "function_calls_returned": 0}
             record(event)
             from contextlib import nullcontext
-            engine = getattr(self.server, "opencode_engine", None)
+            engine = settings.engine if settings else getattr(self.server, "opencode_engine", None)
             if adapter == "opencode":
                 if engine is None:
                     raise GatewayError("The genuine OpenCode inference helper is not running", 502)
