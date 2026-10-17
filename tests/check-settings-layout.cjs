@@ -17,10 +17,13 @@ assert(page.includes('Met as GatewaySearch')&&page.includes('Net as gatewayIniti
 assert(page.includes('$T as GatewaySwitch')&&!page.includes('"slug": "better-codex-keys"'));
 assert(!ui.includes('color-scheme')&&!ui.includes('Canvas')&&!ui.includes('<select'));
 const context={structuredClone,crypto:{randomUUID:()=>`12345678-1234-1234-1234-123456789abc`},li:{createElement:(type,props,...children)=>({type,props:{...props,children:children.length?children:props?.children}})}};
-for(const name of ['GatewayDropdown','GatewayDropdownButton','GatewayRow','GatewayInput','GatewayGroup','GatewaySettingsPage','GatewaySwitch','GatewaySearch'])context[name]=Symbol(name);
+context.li.createContext=value=>({current:value,Provider:Symbol('Provider')});context.li.useContext=value=>value.current;
+let generatedId=0;context.li.useId=()=>`fixture-label-${++generatedId}`;
+for(const name of ['GatewayDropdown','GatewayDropdownButton','GatewayRow','GatewayInput','GatewayGroup','GatewaySettingsPage','GatewaySwitch','GatewaySearch','GatewayFieldStack','GatewayChevron'])context[name]=Symbol(name);
+context.GatewaySettingsSection=Object.assign(()=>{},{Header:Symbol('SectionHeader'),Content:Symbol('SectionContent')});
 context.GatewayMenu={RadioGroup:Symbol('RadioGroup'),RadioItem:Symbol('RadioItem')};
 vm.createContext(context);vm.runInContext(ui,context);
-const {Dropdown,Field,ProviderDisclosure,makeDraft,requestBody,clearKeys,newModel,applyMetadata,removeEntry}=context.gatewayNativeSettingsControls;
+const {DialogLayout,SettingsRow,Action,Dropdown,Field,ProviderDisclosure,makeDraft,requestBody,clearKeys,newModel,applyMetadata,removeEntry}=context.gatewayNativeSettingsControls;
 let selected;
 const menu=Dropdown({label:'Active API key',options:[{value:'first',label:'First'},{value:'second',label:'Second'}],value:'first',onChange:value=>{selected=value}});
 assert.equal(menu.type,context.GatewayDropdown);
@@ -30,8 +33,8 @@ assert.equal(radioGroup.type,context.GatewayMenu.RadioGroup);
 assert.equal(radioGroup.props.value,'first');
 radioGroup.props.children[0][1].props.onSelect();assert.equal(selected,'second');
 const field=Field({label:'API key',type:'password',value:'fixture-only',onChange:()=>{}});
-assert.equal(field.type,context.GatewayRow);
-const input=field.props.control({'aria-labelledby':'native-label'});
+assert.equal(field.type,SettingsRow);
+const input=SettingsRow(field.props).props.control({'aria-labelledby':'native-label'});
 assert.equal(input.type,context.GatewayInput);assert.equal(input.props.type,'password');assert.equal(input.props['aria-labelledby'],'native-label');
 const snapshot={revision:'fixture',providers:{merge:{label:'Merge',adapter:'responses',endpoint:'https://api.example/v1/responses',default_model:'fixture-model',credential_profiles:{active:'default',profiles:[{id:'default',label:'First',saved:true},{id:'second',label:'Second',saved:true}]}}},models:[{id:'fixture-model',provider:'merge',label:'Fixture',context:10000,output:1000,efforts:['low'],default_effort:'low'}]};
 const draft=makeDraft(snapshot);draft.keys.merge.active='second';draft.keys.merge.profiles[1].key='dummy-key-canary';
@@ -71,21 +74,35 @@ context.li.useState=initial=>{const index=cursor++;if(!(index in state))state[in
 let refs=[],refCursor=0,refState;
 context.li.useRef=value=>refs[refCursor++]??(refs[refCursor-1]={current:value});context.li.useEffect=()=>{};
 function render(section,props={}){cursor=0;refCursor=0;if(refState!==state){refs=[];refState=state}return context.gatewaySettingsComponent({section,...props})}
-function nodes(value,result=[]){if(value&&typeof value==='object'){if(value.type)result.push(value);for(const child of Object.values(value))nodes(child,result)}return result}
+function nodes(value,result=[]){
+ if(value&&typeof value==='object'){
+  if(value.type)result.push(value);
+  if(value.type===DialogLayout.Provider){const previous=DialogLayout.current;DialogLayout.current=value.props.value;nodes(value.props.children,result);DialogLayout.current=previous;return result}
+  if([SettingsRow,Action,Field,Dropdown].includes(value.type)){nodes(value.type(value.props),result);return result}
+  if(value.type===context.GatewayRow&&typeof value.props.control==='function')nodes(value.props.control({'aria-labelledby':'fixture-row-label'}),result);
+  for(const child of Object.values(value))nodes(child,result)
+ }
+ return result
+}
 function click(tree,text){const node=nodes(tree).find(n=>n.type===context.GatewayButton&&n.props.children[0]===text);assert(node,`Missing button ${text}`);node.props.onClick()}
 const settingsPage=tree=>nodes(tree).find(n=>n.type===context.GatewaySettingsPage);
-const editorDialog=tree=>nodes(tree).find(n=>n.type===context.GatewayDialog&&n.props.open&&n.props.size==='default');
+const editorDialog=tree=>nodes(tree).find(n=>n.type===context.GatewayDialog&&n.props.open&&nodes(n.props.children).some(c=>c.type===context.GatewayDialogContent&&c.props.as==='form'));
 function openProvider(id){const card=nodes(settingsPage(render('providers'))).find(n=>n.type===context.GatewayGroup&&n.props.key===id);click(card,id==='openai'?'View':'Edit')}
 state=[structuredClone(snapshot),makeDraft(snapshot),false,false,'',false,'merge',{},false,null,null];
 click(render('providers'),'Add provider');
 assert(editorDialog(render('providers')));assert(!nodes(settingsPage(render('providers'))).some(n=>n.type===Field));
+const initialProvider=nodes(editorDialog(render('providers')));
+assert(initialProvider.some(n=>n.type===context.GatewayButton&&n.props.children[0]==='Add provider'&&n.props.disabled&&n.props.color==='primary'&&n.props.type==='submit'));
+assert(initialProvider.some(n=>n.type===context.GatewayInput&&n.props.autoFocus));
 assert(!nodes(editorDialog(render('providers'))).some(n=>n.type===context.GatewaySettingsPage));
 click(editorDialog(render('providers')),'Cancel');assert(!editorDialog(render('providers')));assert.equal(state[3],false);
 click(render('providers'),'Add provider');
 for(const [label,value] of [['Provider ID','fixture'],['Display name','Fixture Provider'],['API URL','https://fixture.example/v1/responses']]){
  const field=nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label===label);assert(field);field.props.onChange(value);
 }
-click(editorDialog(render('providers')),'Add provider');
+let submittedProvider=false;
+nodes(editorDialog(render('providers'))).find(n=>n.type===context.GatewayDialogContent).props.onSubmit({preventDefault(){submittedProvider=true}});
+assert(submittedProvider);
 assert.equal(state[1].providers.fixture.adapter,'responses');assert.equal(state[1].models.length,1);assert.equal(state[12].id,'fixture');
 click(editorDialog(render('providers')),'Delete provider');assert.equal(state[9].kind,'provider');
 click(render('providers'),'Delete');assert(!state[1].providers.fixture);assert(snapshot.providers.merge);assert.equal(state[12],null);
@@ -105,7 +122,7 @@ state=[cards,makeDraft(cards),false,false,'',false,'merge',{},false,null,null];
 let providersPage=render('providers');assert(!nodes(providersPage).some(n=>n.type===Field));
 assert.equal(nodes(settingsPage(providersPage)).filter(n=>n.type===ProviderDisclosure).length,2);
 openProvider('openai');const builtIn=editorDialog(render('providers'));
-assert(nodes(builtIn).some(n=>n.type===context.GatewayRow&&n.props.label==='Authentication'));
+assert(nodes(builtIn).some(n=>n.type===SettingsRow&&n.props.label==='Authentication'));
 assert(!nodes(builtIn).some(n=>n.type===context.GatewaySwitch||n.type===Field||n.type===ProviderDisclosure));click(builtIn,'Done');
 const enabled=nodes(providerCard('merge')).find(n=>n.type===context.GatewaySwitch);assert.equal(enabled.props.checked,true);
 enabled.props.onChange(false);assert.equal(state[1].providers.merge.enabled,false);assert.equal(state[12],null);
@@ -115,12 +132,23 @@ let mergeEditor=editorDialog(render('providers'));
 assert(nodes(mergeEditor).some(n=>n.type===Field&&n.props.label==='API URL'));
 assert(!nodes(mergeEditor).some(n=>n.type===ProviderDisclosure||n.type===Field&&n.props.type==='password'));
 assert(nodes(mergeEditor).some(n=>n.type===context.GatewayDialogContent&&n.props.size==='scrollable'));
-assert(nodes(mergeEditor).some(n=>n.type==='div'&&n.props.className==='min-h-0 overflow-y-auto'));
-assert(nodes(mergeEditor).some(n=>n.type===context.GatewayDialogFooter&&n.props.className==='shrink-0'));
+assert(nodes(mergeEditor).some(n=>n.type===context.GatewayDialogHeader&&n.props.className==='min-h-0 overflow-y-auto'&&n.props.spacing==='large'));
+assert.equal(mergeEditor.props.size,'compact');
+assert(!nodes(mergeEditor).some(n=>n.type===context.GatewayGroup||n.type===context.GatewayRow));
+assert(nodes(mergeEditor).some(n=>n.type===context.GatewayDialogHeader&&n.props.spacing==='large'&&n.props.className==='shrink-0'));
+assert(nodes(mergeEditor).some(n=>n.type===context.GatewayInput&&n.props.variant==='default'&&!n.props.className));
+assert(nodes(mergeEditor).some(n=>n.type===context.GatewayDropdownButton&&n.props.className==='w-full'));
+assert(nodes(mergeEditor).filter(n=>n.type===context.GatewayButton).every(n=>n.props.size==='medium'));
+const mergeNodes=nodes(mergeEditor);
+for(const input of mergeNodes.filter(n=>n.type===context.GatewayInput)) {
+ assert(input.props.id&&input.props['aria-labelledby']);
+ assert(mergeNodes.some(n=>n.type==='label'&&n.props.htmlFor===input.props.id));
+}
 click(mergeEditor,'Done');
 const keysDisclosure=nodes(providerCard('merge')).find(n=>n.type===ProviderDisclosure&&n.props.label==='API keys');
 assert(keysDisclosure);assert.equal(keysDisclosure.props.open,false);
-const nativeDisclosure=ProviderDisclosure(keysDisclosure.props);assert.equal(nativeDisclosure.type,'button');assert.equal(nativeDisclosure.props['aria-expanded'],false);
+const nativeDisclosure=ProviderDisclosure(keysDisclosure.props);assert.equal(nativeDisclosure.type,context.GatewayButton);assert.equal(nativeDisclosure.props['aria-expanded'],false);
+assert(nodes(nativeDisclosure).some(n=>n.type===context.GatewayChevron));
 assert(!nodes(providerCard('merge')).some(n=>n.type===Dropdown&&n.props.label==='Active API key'));
 keysDisclosure.props.onToggle();assert.equal(state[7]['keys:merge'],true);assert.equal(state[3],false);
 nodes(providerCard('merge')).find(n=>n.type===context.GatewayRow&&n.props.label==='First').props.control.props.onClick();
@@ -133,8 +161,23 @@ assert.equal(state[1].keys.merge.profiles[0].key,'owned-unsaved-key-canary');ass
 openProvider('other');assert(!nodes(editorDialog(render('providers'))).some(n=>n.type===ProviderDisclosure||n.type===Field&&n.props.type==='password'));
 editorDialog(render('providers')).props.onOpenChange(false);assert(!editorDialog(render('providers')));
 assert.equal(state[1].keys.merge.profiles[0].key,'owned-unsaved-key-canary');
-click(providerCard('other'),'Add API key');assert.equal(state[1].keys.other.profiles.length,3);assert.equal(state[1].keys.merge.profiles.length,2);
-assert.equal(state[7]['keys:other'],true);assert(nodes(providerCard('other')).some(n=>n.type===Field&&n.props.label==='API key'));
+click(providerCard('other'),'Add API key');assert.equal(state[1].keys.other.profiles.length,2);
+let keyPopup=editorDialog(render('providers'));assert(keyPopup);assert.equal(keyPopup.props.size,'compact');
+assert(nodes(keyPopup).some(n=>n.type===context.GatewayButton&&n.props.children[0]==='Add API key'&&n.props.disabled&&n.props.color==='primary'));
+assert(!nodes(providerCard('other')).some(n=>n.type===Field&&n.props.label==='API key'));
+nodes(keyPopup).find(n=>n.type===Field&&n.props.label==='API key').props.onChange('owned-cancel-key-fixture');
+const canceledKey=state[14];editorDialog(render('providers')).props.onOpenChange(false);
+assert.equal(canceledKey.key,'');assert.equal(state[14],null);assert.equal(state[1].keys.other.profiles.length,2);
+assert.equal(state[1].keys.merge.profiles[0].key,'owned-unsaved-key-canary');
+click(providerCard('other'),'Add API key');
+nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label==='Key name').props.onChange('Third profile');
+nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label==='API key').props.onChange('owned-added-key-fixture');
+keyPopup=editorDialog(render('providers'));
+assert(nodes(keyPopup).some(n=>n.type===context.GatewayInput&&n.props.type==='password'&&n.props.variant==='default'&&n.props.autoComplete==='new-password'));
+nodes(keyPopup).find(n=>n.type===context.GatewayDialogContent).props.onSubmit({preventDefault(){}});
+assert(!editorDialog(render('providers')));assert.equal(state[14],null);assert.equal(state[1].keys.other.profiles.length,3);assert.equal(state[1].keys.merge.profiles.length,2);
+assert.equal(state[1].keys.other.profiles[2].key,'owned-added-key-fixture');
+assert.equal(state[7]['keys:other'],true);
 assert(!nodes(providerCard('other')).some(n=>n.type===Field&&n.props.label==='Replace API key'),'Same profile ID opened another provider');
 openProvider('other');state[2]=true;editorDialog(render('providers')).props.onOpenChange(false);assert.equal(state[12].id,'other');
 assert.equal(editorDialog(render('providers')).props.showDialogClose,false);state[2]=false;
@@ -167,8 +210,9 @@ searchBox().props.onSearchQueryChange('');assert(visibleNames().includes('Fixtur
 searchBox().props.onSearchQueryChange('absent');click(render('models'),'Add model');
 assert.equal(searchBox().props.searchQuery,'');assert(visibleNames().includes('New model'));assert.equal(state[12].index,3);
 const newEditor=editorDialog(render('models'));assert(newEditor);assert(!nodes(settingsPage(render('models'))).some(n=>n.type===Field));
+assert(nodes(newEditor).some(n=>n.type===context.GatewayButton&&n.props.children[0]==='Add model'&&n.props.disabled&&n.props.color==='primary'&&n.props.type==='submit'));
 const modelId=nodes(newEditor).find(n=>n.type===Field&&n.props.label==='Model ID');assert.equal(modelId.props.readOnly,false);assert.equal(typeof modelId.props.onBlur,'function');
-click(newEditor,'Discard new model');assert.equal(state[1].models.length,3);assert.equal(state[12],null);assert.equal(state[1].models[1].label,'Changed second');
+click(newEditor,'Cancel');assert.equal(state[1].models.length,3);assert.equal(state[12],null);assert.equal(state[1].models[1].label,'Changed second');
 // Dismissing a creation dialog discards only its model, even if its typed ID
 // duplicates a saved model; existing unsaved edits and key drafts survive.
 const otherDraft=JSON.stringify(requestBody(searching,state[1]));
@@ -266,7 +310,7 @@ console.log('PASS: actual native dropdown/radio/input bindings, accessible label
  const urlField=()=>nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label==='API URL');
  urlField().props.onFocus();urlField().props.onChange('https://new-fixture.example/v1/responses');schedule('providers');assert.equal(timers.size,0);
  urlField().props.onBlur();schedule('providers');const count=saved.length;await flush();assert.equal(state[8],true);assert.equal(saved.length,count);
- nodes(render('providers')).find(n=>n.type===context.GatewayDialog&&n.props.open&&n.props.size==='compact').props.onOpenChange(false);
+ nodes(render('providers')).find(n=>n.type===context.GatewayDialog&&n.props.open&&n.props.size==='compact'&&!nodes(n.props.children).some(c=>c.type===context.GatewayDialogContent&&c.props.as==='form')).props.onOpenChange(false);
  schedule('providers');assert.equal(timers.size,0);assert.equal(state[5],true);assert.equal(state[8],false);
  await nodes(settingsPage(render('providers'))).find(n=>n.type===context.GatewayButton&&n.props.children[0]==='Retry').props.onClick();assert.equal(state[8],true);
  await nodes(render('providers')).find(n=>n.type===context.GatewayButton&&n.props.children[0]==='Use address').props.onClick();assert.equal(saved.length,count+1);assert.equal(state[8],false);
@@ -277,6 +321,15 @@ console.log('PASS: actual native dropdown/radio/input bindings, accessible label
  schedule();assert.equal(timers.size,0);editorDialog(render('models')).props.onOpenChange(false);assert.equal(state[1].models.length,1);assert.equal(state[3],false);
  click(render('models'),'Add model');Object.assign(state[1].models[state[12].index],{id:'fixture-new-model',label:'New model',context:10000,output:1000,efforts:['none'],default_effort:'none'});
  click(editorDialog(render('models')),'Add model');schedule();assert.equal(timers.size,1);await flush();assert.equal(state[0].models.length,2);assert(!editorDialog(render('models')));
+ // Key creation stays local until Add, then participates in ordinary autosave.
+ state=[supported,makeDraft(supported),false,false,'',false,'merge',{},false,null,null];
+ click(providerCard('merge'),'Add API key');
+ nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label==='Key name').props.onChange('New account');
+ nodes(editorDialog(render('providers'))).find(n=>n.type===Field&&n.props.label==='API key').props.onChange('owned-popup-key-fixture');
+ schedule('providers');assert.equal(timers.size,0);assert.equal(state[1].keys.merge.profiles.length,2);assert.equal(state[3],false);
+ click(editorDialog(render('providers')),'Add API key');schedule('providers');assert.equal(timers.size,1);await flush();
+ assert.equal(state[0].providers.merge.credential_profiles.profiles.length,3);assert.equal(state[3],false);assert.equal(state[14],null);
+ assert.equal(state[1].keys.merge.profiles.at(-1).key,'');assert.equal(saved.at(-1).keys.merge.profiles.at(-1).key,'owned-popup-key-fixture');
  console.log('PASS: debounced automatic saves, sensitive-field blur, incomplete-entry guards, retry without key loss, serial revisions and newer-edit preservation; new models remain cancellable until Add.');
  console.log('PASS: native scrollable provider/model edit and creation dialogs; compact lists, inline key sections, new-model dismissal, draft preservation, guarded closing, delete confirmations and save/error handling.');
  console.log('PASS: Refresh models sits beside Add model, stays available for an empty catalog and protects drafts; no custom Back/ordinary Apply button; Retry apply clears after success.');

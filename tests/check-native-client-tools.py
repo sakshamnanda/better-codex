@@ -55,6 +55,12 @@ class Backend(BaseHTTPRequestHandler):
             results.extend(item.get('output', '') for item in payload.get('input', []) if item.get('type') in {'function_call_output', 'custom_tool_call_output'})
             gateway = GatewayCore('fixture_capability_12345678901234567890', server.server_port, set(), lambda p: 'dummy-provider-fixture')
             prepared, _, _ = prepare_routed_request(gateway, gateway.prefix + '/backend-api/codex/responses', [('Host', gateway.host), ('Authorization', 'Bearer dummy-native-fixture'), ('Content-Type', 'application/json')], json.dumps(payload).encode())
+            forwarded = json.loads(prepared.body)['input']
+            for call in payload.get('input', []):
+                if call.get('type') == 'custom_tool_call':
+                    wire_call = next(item for item in forwarded if item.get('type') == 'function_call' and item.get('call_id') == call['call_id'])
+                    assert json.loads(wire_call['arguments']) == {'input': call['input']}
+                    assert any(item.get('type') == 'function_call_output' and item.get('call_id') == call['call_id'] for item in forwarded)
             names = prepared.tools
             inventory = {(ns, name): wire for wire, (ns, name) in names.from_wire.items()}
             observed.append(inventory)

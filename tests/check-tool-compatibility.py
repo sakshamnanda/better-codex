@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src/gateway'))
 from core import GatewayCore, GatewayError, ToolNames, portable_history
 from provider_relay import translated_events
-from chat_bridge import response_events
+from chat_bridge import prepare_chat, response_events
 
 declarations = [
     {'type': 'namespace', 'name': 'functions', 'tools': [
@@ -59,6 +59,47 @@ payload = {'model': 'zai/glm-5.3-flash', 'input': history, 'tools': declarations
 prepared = core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, json.dumps(payload).encode())
 assert json.loads(prepared.body)['tool_choice'] == {'type': 'function', 'name': 'functions__apply_patch'}
 assert b'native-secret-fixture' not in prepared.body and dict(prepared.headers)['Authorization'] == 'Bearer provider-fixture'
+
+# Completed native text tools must use the same JSON wrapper as newly emitted
+# calls, across all routes and both gateway hops. They are not assistant prose.
+for model in ('zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'space-bunny-free', 'step-5-preview-free'):
+    for namespace in ('functions', None):
+        declared = declarations if namespace else [declarations[0]['tools'][-1], *declarations[1:]]
+        native_history = copy.deepcopy(history)
+        native_history[0]['namespace'] = namespace
+        native_history[0]['input'] = patch + '\n# literal \\"quote\\" and unicode \U0001f430'
+        native_history[1]['output'] = [{'type': 'input_text', 'text': 'Actual patch result', 'private_field': 'not-portable'}]
+        request = {**payload, 'model': model, 'tools': declared, 'input': native_history, 'tool_choice': 'auto'}
+        original = copy.deepcopy(request)
+        forwarded = core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, json.dumps(request).encode())
+        wire = json.loads(forwarded.body)
+        call, output = wire['input'][:2]
+        assert call['type'] == 'function_call' and call['call_id'] == output['call_id'] == 'old-patch'
+        assert call['name'] == ('functions__apply_patch' if namespace else 'apply_patch')
+        assert json.loads(call['arguments']) == {'input': native_history[0]['input']}
+        assert output == {'type': 'function_call_output', 'call_id': 'old-patch',
+                          'output': [{'type': 'input_text', 'text': 'Actual patch result'}]}
+        assert all(item['role'] == 'user' for item in wire['input'][2:])
+        assert 'Historical tool record' not in json.dumps(wire['input'])
+        assert 'not-portable' not in forwarded.body.decode() and request == original
+        nested = core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, forwarded.body)
+        assert json.loads(nested.body)['input'] == wire['input']
+        chat = prepare_chat(wire)
+        assistant, tool_result = chat['messages'][1:3]
+        assert assistant['role'] == 'assistant' and assistant['content'] is None
+        assert assistant['tool_calls'][0]['function'] == {'name': call['name'], 'arguments': call['arguments']}
+        assert tool_result['role'] == 'tool' and tool_result['tool_call_id'] == 'old-patch'
+        assert 'Actual patch result' in tool_result['content']
+
+for invalid in ([history[0]], [history[0], history[0], history[1]],
+                [history[0], history[1], history[1]], [history[1]],
+                [history[0], {'type': 'function_call_output', 'call_id': 'old-patch', 'output': 'wrong kind'}],
+                [history[0], {'type': 'function_call', 'namespace': 'functions', 'name': 'exec_command',
+                              'call_id': 'old-patch', 'arguments': '{}'}, history[1]]):
+    try:
+        core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, json.dumps({**payload, 'input': invalid}).encode())
+        raise AssertionError('Ambiguous/incomplete custom tool history accepted')
+    except GatewayError as error: assert error.status == 422
 discovered_payload = {**payload, 'tools': [declarations[-1]], 'tool_choice': 'auto'}
 loaded = core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, json.dumps(discovered_payload).encode())
 assert ('mcp__fixture_tunnel', 'read_status') in loaded.tools.to_wire, 'Schemas returned only in discovery history were lost'

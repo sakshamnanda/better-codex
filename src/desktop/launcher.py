@@ -15,6 +15,66 @@ SUPPORT = ROOT / 'support'
 TRANSACTION = SUPPORT / 'Live-Transaction.json'
 POWERSHELL = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
 
+def app_environment():
+    """Restore Windows shell variables even when our parent was sanitized."""
+    import ctypes as C
+    from ctypes import wintypes as W
+    import re
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    security = C.WinDLL('advapi32', use_last_error=True)
+    userenv = C.WinDLL('userenv', use_last_error=True)
+    kernel.GetCurrentProcess.restype = W.HANDLE
+    kernel.CloseHandle.argtypes = [W.HANDLE]
+    kernel.GetSystemWindowsDirectoryW.argtypes = [W.LPWSTR, W.UINT]
+    security.OpenProcessToken.argtypes = [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]
+    userenv.CreateEnvironmentBlock.argtypes = [C.POINTER(C.c_void_p), W.HANDLE, W.BOOL]
+    userenv.DestroyEnvironmentBlock.argtypes = [C.c_void_p]
+    token = W.HANDLE()
+    if not security.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008 | 0x0002, C.byref(token)):
+        raise C.WinError(C.get_last_error())
+    block = C.c_void_p()
+    values = {}
+    try:
+        if not userenv.CreateEnvironmentBlock(C.byref(block), token, False):
+            raise C.WinError(C.get_last_error())
+        cursor = block.value
+        while entry := C.wstring_at(cursor):
+            name, _, value = entry.partition('=')
+            values[name.upper()] = value
+            cursor += len(entry.encode('utf-16-le', errors='surrogatepass')) + C.sizeof(C.c_wchar)
+    finally:
+        if block.value: userenv.DestroyEnvironmentBlock(block)
+        kernel.CloseHandle(token)
+    # Preserve inherited tool paths, but never inherit arbitrary credentials or
+    # runtime flags. Shell extensions need more than the old CLI-only allowlist.
+    values.update((key.upper(), value) for key, value in os.environ.items())
+    windows = C.create_unicode_buffer(32768)
+    size = kernel.GetSystemWindowsDirectoryW(windows, len(windows))
+    if not 0 < size < len(windows): raise C.WinError(C.get_last_error())
+    # Userenv itself expands registry paths against its parent's environment.
+    # A previously sanitized parent leaves %SystemDrive% unresolved even with
+    # inherit=False, so seed it from Windows and finish the bounded expansion.
+    values['SYSTEMDRIVE'] = Path(windows.value).drive
+    for _ in range(10):
+        expanded = {key: re.sub(r'%([^%]+)%', lambda m: values.get(m[1].upper(), m[0]), value)
+                    for key, value in values.items()}
+        if expanded == values: break
+        values = expanded
+    allowed = (
+        'SystemRoot', 'SystemDrive', 'WINDIR', 'PATH', 'PATHEXT', 'TEMP', 'TMP',
+        'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'COMSPEC', 'NUMBER_OF_PROCESSORS',
+        'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'OS',
+        'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles',
+        'CommonProgramFiles(x86)', 'CommonProgramW6432', 'ProgramData',
+        'ALLUSERSPROFILE', 'PUBLIC', 'HOMEDRIVE', 'HOMEPATH', 'USERNAME',
+        'USERDOMAIN', 'USERDOMAIN_ROAMINGPROFILE', 'LOGONSERVER', 'COMPUTERNAME',
+    )
+    environment = {name: values[name.upper()] for name in allowed if name.upper() in values}
+    for name in ('SystemRoot', 'SystemDrive', 'ProgramData', 'ProgramFiles', 'CommonProgramFiles', 'PUBLIC'):
+        if not environment.get(name) or re.search(r'%[^%]+%', environment[name]):
+            raise RuntimeError('Windows shell environment could not be restored: ' + name)
+    return environment
+
 def shell(script,*arguments):
     return subprocess.run([str(POWERSHELL),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT / script),*arguments],capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
 
@@ -87,13 +147,13 @@ def main():
     child = None
     pipe = None
     try:
+        environment = app_environment()
         service = Service()
         config = Path(os.environ['USERPROFILE']) / '.codex/config.toml'
         service.start(config.parent)
         # Dynamic discovery lets the same backend reload verified model metadata.
         # A static model_catalog_json builds an immutable manager at startup.
         activate(config,service.base_url,None,ROOT / 'backups',TRANSACTION)
-        environment = {key:os.environ[key] for key in ('SystemRoot','WINDIR','PATH','PATHEXT','TEMP','TMP','USERPROFILE','LOCALAPPDATA','APPDATA','COMSPEC','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE') if key in os.environ}
         environment['CODEX_HOME'] = str(config.parent)
         environment['CODEX_CLI_PATH'] = str(Path(deployment['source_app']) / 'resources/codex.exe')
         pipe = PrivatePipe()

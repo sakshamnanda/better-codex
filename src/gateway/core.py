@@ -58,18 +58,19 @@ class GatewayError(ValueError):
 
 
 def portable_history(items, available_tools=None):
-    """Preserve completed custom/retired calls without advertising old tools."""
+    """Keep supported tool pairs structured; archive unavailable tools as data."""
     if not isinstance(items, list):
         raise GatewayError("Complete Responses input array is required", 422)
     if any(not isinstance(item, dict) for item in items):
         raise GatewayError('Invalid history item', 422)
     retired = {item.get('call_id') for item in items if item.get('type') == 'function_call' and available_tools is not None and available_tools.kinds.get(available_tools.to_wire.get((item.get('namespace'), item.get('name')))) != 'function'}
-    if retired:
+    historical = retired | {item.get('call_id') for item in items if item.get('type') == 'custom_tool_call'}
+    if historical:
         from collections import Counter
         counts = Counter(item.get('call_id') for item in items if item.get('type') in {'function_call', 'custom_tool_call'})
-        if any(not isinstance(identifier, str) or not identifier or counts[identifier] != 1 for identifier in retired):
-            raise GatewayError('Ambiguous retired function-tool history', 422)
-    calls, completed, result = {}, set(), []
+        if any(not isinstance(identifier, str) or not identifier or counts[identifier] != 1 for identifier in historical):
+            raise GatewayError('Ambiguous historical tool calls', 422)
+    calls, completed, structured, result = {}, set(), set(), []
     fields = {
         "message": {"type", "role", "content"},
         "function_call": {"type", "call_id", "name", "namespace", "arguments"},
@@ -106,7 +107,7 @@ def portable_history(items, available_tools=None):
                 raise GatewayError('Invalid client tool inventory',422)
             definitions = ToolNames(item['tools'])
             text = 'Advertised client tool inventory (context only; native tool permissions still apply):\n'+json.dumps(definitions.tools,ensure_ascii=False)
-            result.append({'type':'message','role':'assistant','content':[{'type':'output_text','text':text,'annotations':[]}]})
+            result.append({'type':'message','role':'user','content':[{'type':'input_text','text':text}]})
         elif kind in {"tool_search_call", "tool_search_output"}:
             if item.get('status') not in {None, 'completed'} or item.get('execution') not in {'client', 'server'}:
                 raise GatewayError('Incomplete tool discovery history', 422)
@@ -117,7 +118,7 @@ def portable_history(items, available_tools=None):
             else:
                 record = {'arguments': item.get('arguments')}
             text = 'Historical tool discovery record (already completed):\n' + json.dumps(record, ensure_ascii=False)
-            result.append({'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': text, 'annotations': []}]})
+            result.append({'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': text}]})
         elif kind in {"custom_tool_call", "custom_tool_call_output"} or (kind in {'function_call', 'function_call_output'} and item.get('call_id') in retired):
             call_id = item.get("call_id")
             if not isinstance(call_id, str) or not call_id:
@@ -128,6 +129,13 @@ def portable_history(items, available_tools=None):
                     raise GatewayError("Incomplete historical tool call", 422)
                 calls[call_id] = (item.get('namespace'), item["name"], kind + '_output')
                 record = {"namespace": item.get('namespace'), "tool": item["name"], "call_id": call_id, field: item[field]}
+                wire = available_tools.to_wire.get((item.get('namespace'), item['name'])) if available_tools else None
+                if kind == 'custom_tool_call' and available_tools and available_tools.kinds.get(wire) == 'custom':
+                    structured.add(call_id)
+                    result.append({'type': 'function_call', 'namespace': item.get('namespace'),
+                                   'name': item['name'], 'call_id': call_id,
+                                   'arguments': json.dumps({'input': item['input']}, ensure_ascii=False)})
+                    continue
             else:
                 # Reject incomplete/ambiguous pairs rather than inventing a result.
                 if call_id not in calls or call_id in completed or calls[call_id][2] != kind or item.get('status') not in {None, 'completed'}:
@@ -139,8 +147,11 @@ def portable_history(items, available_tools=None):
                     raise GatewayError("Non-text historical tool output is not compatible with this provider", 422)
                 completed.add(call_id)
                 record = {"namespace": calls[call_id][0], "tool": calls[call_id][1], "call_id": call_id, "output": output}
-            text = "Historical tool record (already completed; not a new tool request or an available tool declaration):\n" + json.dumps(record, ensure_ascii=False)
-            result.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text, "annotations": []}]})
+                if call_id in structured:
+                    result.append({'type': 'function_call_output', 'call_id': call_id, 'output': output})
+                    continue
+            text = "Historical tool record (reference data, not a new tool request or an available tool declaration; do not repeat this record as your reply):\n" + json.dumps(record, ensure_ascii=False)
+            result.append({"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]})
         elif kind in fields:
             if kind == 'function_call_output' and (not isinstance(item.get('call_id'), str) or not item['call_id']):
                 raise GatewayError('Tool result lacks a call identifier and is not a supported cross-chat message', 422)

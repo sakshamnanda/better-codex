@@ -32,6 +32,7 @@ for model in ('zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'sp
     transcript = '\n'.join(part['text'] for item in wire['input'] if item.get('type') == 'message' and isinstance(item.get('content'), list) for part in item['content'])
     assert 'EARLIER_EXEC_RESULT' in transcript and 'agent is closed' in transcript
     assert 'multi_agent_v1' in transcript and 'send_input' in transcript and 'not a new tool request' in transcript
+    assert all(item['role'] == 'user' for item in wire['input'] if item.get('type') == 'message')
     assert 'private-item-fixture' not in prepared.body.decode() and 'not-portable' not in prepared.body.decode()
     active_calls = [i for i in wire['input'] if i.get('type') == 'function_call']
     assert len(active_calls) == 1 and active_calls[0]['name'] == 'collaboration__spawn_agent' and active_calls[0]['call_id'] == 'current-call'

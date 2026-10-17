@@ -105,8 +105,8 @@ with (Path(manifest['source_app']) / 'resources/app.asar').open('rb') as handle:
     for filename,expected in native_hashes.items():
         item=tree[filename];handle.seek(8+header_size+int(item['offset']))
         assert hashlib.sha256(handle.read(item['size'])).hexdigest()==expected, 'Native settings controls changed; customization refused'
-native_imports = '''import {_S as GatewayRow,lS as GatewayGroup,$T as GatewaySwitch,GT as GatewayDropdown,qT as GatewayMenu,Ck as GatewayButton,IT as GatewayDialog,OT as GatewayDialogContent,jT as GatewayDialogHeader,kT as GatewayDialogFooter,AT as GatewayDialogHeading,zT as GatewayDialogTitle,RT as GatewayDialogSubtitle} from "./app-shared-737655e1fb23.js";
-import {MA as GatewayDropdownButton,lEn as GatewayInput,Met as GatewaySearch,Net as gatewayInitializeSearch,YA as GatewaySettingsPage,irt as GatewayDirtySettings,ert as gatewayInitializeDirtySettings} from "./app-initial-b8e1c8014bb4.js";
+native_imports = '''import {_S as GatewayRow,lS as GatewayGroup,$T as GatewaySwitch,GT as GatewayDropdown,qT as GatewayMenu,Ck as GatewayButton,IT as GatewayDialog,OT as GatewayDialogContent,K9 as GatewayChevron,MT as GatewayFieldStack,jT as GatewayDialogHeader,kT as GatewayDialogFooter,AT as GatewayDialogHeading,zT as GatewayDialogTitle,RT as GatewayDialogSubtitle} from "./app-shared-737655e1fb23.js";
+import {xT as GatewaySettingsSection,ST as gatewayInitializeSettingsSection,MA as GatewayDropdownButton,lEn as GatewayInput,Met as GatewaySearch,Net as gatewayInitializeSearch,YA as GatewaySettingsPage,irt as GatewayDirtySettings,ert as gatewayInitializeDirtySettings} from "./app-initial-b8e1c8014bb4.js";
 import {s as gatewayInitializeSettingsControls} from "./general-settings-161845fad443.js";
 '''
 settings_source = native_imports + settings_source
@@ -132,7 +132,7 @@ for before, after in replacements.items():
     settings_source = settings_source.replace(before,after,1)
 initializer='ui();export{ri as SettingsPage};'
 assert settings_source.count(initializer)==1
-settings_source=settings_source.replace(initializer,'ui();gatewayInitializeSettingsControls();gatewayInitializeDirtySettings();gatewayInitializeSearch();\n'+(ROOT/'src/ui/api-settings.js').read_text(encoding='utf-8')+'\nexport{ri as SettingsPage};',1)
+settings_source=settings_source.replace(initializer,'ui();gatewayInitializeSettingsControls();gatewayInitializeDirtySettings();gatewayInitializeSearch();gatewayInitializeSettingsSection();\n'+(ROOT/'src/ui/api-settings.js').read_text(encoding='utf-8')+'\nexport{ri as SettingsPage};',1)
 # Only known source types are copied; keys, state and vendor files stay local.
 for source_dir, target_dir, suffixes in (
     (ROOT / 'src/desktop', DEPLOY, {'.py'}),
