@@ -19,7 +19,7 @@ root=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(root/'src/desktop'));sys.path.insert(0,str(root/'src/gateway'))
 from catalog_refresh import CatalogCache
 from core import ToolNames
-selected=root/(root/'.local/deployment-path.txt').read_text().strip()
+selected=root/os.environ.get('BETTER_CODEX_TEST_DEPLOYMENT',(root/'.local/deployment-path.txt').read_text().strip())
 manifest=json.loads((selected/'Deployment.json').read_text());installed=Path(manifest['source_app'])
 for name,expected in manifest['installed_file_hashes'].items():
  with (installed/name).open('rb') as handle:assert hashlib.file_digest(handle,'sha256').hexdigest()==expected

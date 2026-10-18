@@ -18,14 +18,25 @@ if (Test-Path -LiteralPath $settingsPath) {
     if ((Split-Path $settings -Parent).TrimEnd('\') -ne $localRoot.TrimEnd('\')) { throw 'Settings must remain beside the verified runtime' }
 }
 if ($Mode -eq 'Rollback' -and (Test-Path -LiteralPath $pendingPath)) { Remove-Item -LiteralPath $pendingPath }
-if ($Mode -eq 'Launch' -and !$Preflight -and (Test-Path -LiteralPath $pendingPath)) {
+if ($Mode -eq 'Launch' -and (Test-Path -LiteralPath $pendingPath)) {
     $pending = [IO.Path]::GetFullPath((Join-Path $projectRoot (Get-Content -LiteralPath $pendingPath -Raw).Trim()))
     if ((Split-Path $pending -Parent).TrimEnd('\') -ne $localRoot.TrimEnd('\')) { throw 'Pending update must be a sibling managed deployment' }
     $manifest = Get-Content -LiteralPath (Join-Path $deployment 'Deployment.json') -Raw | ConvertFrom-Json
     & (Join-Path $deployment 'Check-Closed.ps1') -InstalledApp $manifest.source_app
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    # A Store update may remove the old executable while the replacement app
+    # is open. Check both package roots before selecting or consuming a queue.
+    $pendingManifest = Get-Content -LiteralPath (Join-Path $pending 'Deployment.json') -Raw | ConvertFrom-Json
+    if ($pendingManifest.source_app -ne $manifest.source_app) {
+        & (Join-Path $pending 'Check-Closed.ps1') -InstalledApp $pendingManifest.source_app
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    }
     & python (Join-Path $pending 'launcher.py') --check
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    if ($Preflight) {
+        Write-Output 'READ-ONLY PREFLIGHT: queued replacement verified and both package roots are closed. No selection, configuration or processes changed.'
+        exit 0
+    }
     $unchanged = $true
     foreach ($name in @('providers.json','models.json','instructions.json')) {
         if ((Get-FileHash -LiteralPath (Join-Path $projectRoot "config\$name")).Hash -ne (Get-FileHash -LiteralPath (Join-Path $pending $name)).Hash) { $unchanged = $false }

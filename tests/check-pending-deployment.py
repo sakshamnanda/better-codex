@@ -30,9 +30,19 @@ with tempfile.TemporaryDirectory(dir=root/'.local',prefix='pending-check-') as d
         return subprocess.run([str(ps),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(script),*args],capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
     (old/'blocked').touch();assert run().returncode==2
     assert selected.read_text()=='.local/old' and pending.exists() and not (new/'launched').exists()
+    # After a Store upgrade only the new package root may have an open app.
+    (old/'blocked').unlink()
+    (new/'Deployment.json').write_text(json.dumps({'source_app':'updated-build-fixture'}))
+    (new/'blocked').touch();assert run().returncode==2
+    assert selected.read_text()=='.local/old' and pending.exists() and not (new/'launched').exists()
+    (new/'blocked').unlink()
+    (old/'blocked').touch()
     (old/'blocked').unlink();(new/'refuse').touch();assert run().returncode==7
     assert selected.read_text()=='.local/old' and pending.exists()
-    (new/'refuse').unlink();result=run();assert result.returncode==0,result.stderr
+    (new/'refuse').unlink()
+    result=run('-Preflight');assert result.returncode==0,result.stderr
+    assert selected.read_text()=='.local/old' and pending.exists() and not (new/'launched').exists()
+    result=run();assert result.returncode==0,result.stderr
     assert selected.read_text().replace('\\','/')=='.local/new' and not pending.exists()
     assert (local/'previous-code-deployment.txt').read_text()=='.local/old' and (new/'launched').exists()
     # A later key edit must win over the older staged copy.

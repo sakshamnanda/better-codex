@@ -81,8 +81,13 @@ def shell(script,*arguments):
 def verify_files():
     deployment = json.loads((ROOT / 'Deployment.json').read_text())
     for name,expected in deployment['installed_file_hashes'].items():
-        with (Path(deployment['source_app']) / name).open('rb') as handle:
-            if hashlib.file_digest(handle,'sha256').hexdigest() != expected: raise RuntimeError('Installed Codex build changed. Customization refused; the signed installation remains intact.')
+        try:
+            with (Path(deployment['source_app']) / name).open('rb') as handle:
+                matches = hashlib.file_digest(handle,'sha256').hexdigest() == expected
+        except FileNotFoundError:
+            matches = False
+        if not matches:
+            raise RuntimeError('Installed Codex build changed. Customization refused; prepare a verified replacement for this app version. The signed installation remains intact.')
     checks = json.loads((ROOT / 'Helper-Checksums.json').read_text())
     for name,expected in checks.items():
         if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != expected: raise RuntimeError('Provider helper verification failed; customization refused')

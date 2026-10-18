@@ -9,29 +9,30 @@ import struct
 root=Path(__file__).resolve().parent.parent
 deployment=root/os.environ.get('BETTER_CODEX_TEST_DEPLOYMENT',(root/'.local/deployment-path.txt').read_text().strip())
 manifest=json.loads((deployment/'Deployment.json').read_text())
+updated='26.1013.4894.0' in manifest['source_app']
 with (Path(manifest['source_app'])/'resources/app.asar').open('rb') as handle:
     _,size=struct.unpack('<II',handle.read(8));header=handle.read(size)
     assets=json.loads(header[8:8+struct.unpack('<II',header[:8])[1]])['files']['webview']['files']['assets']['files']
     def read(name):
         item=assets[name];handle.seek(8+size+int(item['offset']))
         return handle.read(item['size'])
-    reference=read('settings-6e80d258418b.js')
-    assert hashlib.sha256(reference).hexdigest()=='0ef9fdc55d761bb6ef121967d158a949b99a954deed722985c2a08602ba64abb'
+    reference=read('settings-9aafd1906a04.js' if updated else 'settings-6e80d258418b.js')
+    assert hashlib.sha256(reference).hexdigest()==('f7d28342c8dabd2f6aa500b49837b5ee3d403d873a09e20074cb9c624765d0c3' if updated else '0ef9fdc55d761bb6ef121967d158a949b99a954deed722985c2a08602ba64abb')
     native=reference.decode()
     for token in ('size:`compact`','spacing:`large`','text-sm font-medium text-default select-none','as:`form`','type:`submit`,color:`primary`'):
         assert token in native,'Native dialog contract changed'
-    shared=read('app-shared-737655e1fb23.js')
-    assert hashlib.sha256(shared).hexdigest()=='a1daa891e89a395b8db399ff6eaa365f12a86880c3d8cf891caf4ccbcb9eebf5'
-    assert b'SNi as MT' in shared and b'flex flex-col gap-2' in shared
-    styles=read('app-shared-9a94b907ed47.css').decode()
+    shared=read('app-shared-bbfeca5e5737.js' if updated else 'app-shared-737655e1fb23.js')
+    assert hashlib.sha256(shared).hexdigest()==('a6579611db8acf9c9908e2a29e70a88687eaa1d8f8dbcdc258de58f286051e9d' if updated else 'a1daa891e89a395b8db399ff6eaa365f12a86880c3d8cf891caf4ccbcb9eebf5')
+    assert (b'rCn as uO' if updated else b'SNi as MT') in shared and b'flex flex-col gap-2' in shared
+    styles=read('app-shared-dc7535e633d7.css' if updated else 'app-shared-9a94b907ed47.css').decode()
     for token in ('._body_1rxrl_2{padding-inline:calc(var(--spacing',
                   '._largeSection_1rxrl_2{padding-top:calc(var(--spacing',
                   '.bg-primary-soft{background-color:var(--color-background-primary-soft)'):
         assert token in styles,'Native spacing/theme contract changed'
 
 ui=(root/'src/ui/api-settings.js').read_text(encoding='utf-8')
-build=(root/'scripts/build-deployment.py').read_text(encoding='utf-8')
-for token in ('MT as GatewayFieldStack','xT as GatewaySettingsSection','gatewayInitializeSettingsSection();'):
+build=(root/('src/desktop/build_compatibility.py' if updated else 'scripts/build-deployment.py')).read_text(encoding='utf-8')
+for token in (('uO as GatewayFieldStack','Tk as GatewaySettingsSection','gatewayInitializeSettingsSection();') if updated else ('MT as GatewayFieldStack','xT as GatewaySettingsSection','gatewayInitializeSettingsSection();')):
     assert token in build
 for token in ('e(DialogLayout.Provider,{value:true}', 'variant:inDialog?`default`:`settings`',
               'e(GatewayFieldStack', 'e(GatewaySettingsSection.Header', 'className:inDialog?`w-full`:`max-w-64`'):

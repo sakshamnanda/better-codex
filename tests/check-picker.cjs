@@ -24,7 +24,30 @@ const context = {
   mh: {Title: 'title', Item: 'item', Separator: 'separator'}, wn: 'selected-icon',
 };
 vm.createContext(context);
-vm.runInContext('const gatewayProviderConfig = ' + JSON.stringify(config) + ';\n' + fs.readFileSync(path.join(root, 'src/ui/provider-picker.js'), 'utf8'), context);
+// Exercise the actual generated helper, including reviewed renamed bindings.
+const updatedBuild=built.includes('function e8e(e){e=gatewayPickerMenuProps(e);');
+if(updatedBuild)Object.assign(context,{Pf:context.Z,YU:context.CU,Fi:context.mh,Wu:context.wn});
+const helper=built.slice(built.indexOf('globalThis.gatewayUpdateProviderConfig ='),built.indexOf(updatedBuild?'\nfunction e8e(e){':'\nfunction b8e(e){'));
+assert(helper.includes('function gatewayPickerMenuProps(props)'));
+vm.runInContext('const gatewayProviderConfig = ' + JSON.stringify(config) + ';\n' + helper, context);
+const chatRef = {current: false};
+let defaultSelections = 0;
+const chatReact = {useRef: () => chatRef, useEffect: effect => effect()};
+const selectDefault = () => defaultSelections++;
+context.gatewayChatDefaultModel(chatReact, 'existing-chat', true, selectDefault);
+assert.equal(defaultSelections, 0);
+context.gatewayChatDefaultModel(chatReact, null, false, selectDefault);
+assert.equal(defaultSelections, 0);
+context.gatewayChatDefaultModel(chatReact, null, true, selectDefault);
+assert.equal(defaultSelections, 1);
+// Renders after a user's model change must not reset the new composer again.
+context.gatewayChatDefaultModel(chatReact, null, true, selectDefault);
+assert.equal(defaultSelections, 1);
+context.gatewayChatDefaultModel(chatReact, 'saved-chat', true, selectDefault);
+context.gatewayChatDefaultModel(chatReact, null, true, selectDefault);
+assert.equal(defaultSelections, 2);
+assert(built.includes('gatewayChatDefaultModel(ZW,n,(w||T)&&Qe&&!We,'));
+assert(built.includes('sA(D,`default`,T);g({slug:f.defaultModelSlug,'));
 (async () => {
   const selected = [];
   const options = ['gpt-native-fixture', ...Object.keys(config.models)].map(id => ({id: id + ':high', onSelect: () => {selected.push(id);}}));
@@ -64,6 +87,7 @@ vm.runInContext('const gatewayProviderConfig = ' + JSON.stringify(config) + ';\n
   const native=context.gatewayPickerMenuProps({...props,selectedPowerSelection:{model:'gpt-native-fixture'},modelListConfig:{options:options.filter(o=>o.id.startsWith('gpt-native-fixture'))}});
   assert(native.menuHeader.children.some(c=>c?.children===disabled.label&&c.disabled));
   assert(!native.menuHeader.children.some(c=>c?.children==='API keys'));
+  assert(!native.menuHeader.children.some(c=>['Better Codex','Providers','Models'].includes(c?.children)));
   const nativeAll=context.gatewayPickerMenuProps({...props,selectedPowerSelection:{model:'gpt-native-fixture'},modelListConfig:{options}});
   nativeAll.menuHeader.children.find(c=>c?.children===disabled.label).onSelect({preventDefault(){}});
   await Promise.resolve();assert.equal(selected.length,count);
