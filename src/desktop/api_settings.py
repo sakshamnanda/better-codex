@@ -16,7 +16,8 @@ EFFORTS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra')
 PROFILE_ID = re.compile(r'[a-z][a-z0-9_-]{0,63}')
 # Shared provider metadata parser lives beside the gateway protocol adapters.
 sys.path.insert(0,str(Path(__file__).resolve().parent / 'gateway' if (Path(__file__).resolve().parent / 'gateway').is_dir() else Path(__file__).resolve().parent.parent / 'gateway'))
-from model_metadata import discover, valid_model_id
+from model_metadata import discover, discover_upstreams, valid_model_id
+from provider_registry import validate_upstream, validate_service_tier
 
 
 def credential_profiles(folder, providers):
@@ -115,7 +116,7 @@ def prepare_configuration(request, providers, catalog):
     seen = set()
     for row in rows:
         fields={'id', 'provider', 'label', 'context', 'output', 'efforts', 'default_effort'}
-        if not isinstance(row, dict) or not fields <= set(row) or set(row)-fields-{'metadata_mode','reasoning_mode','enabled'}:
+        if not isinstance(row, dict) or not fields <= set(row) or set(row)-fields-{'metadata_mode','reasoning_mode','enabled','upstream_provider','service_tier'}:
             raise ValueError('Unexpected model options.')
         if type(row.get('enabled',True)) is not bool:raise ValueError('Model enabled must be a boolean.')
         mid, pid = row['id'], row['provider']
@@ -159,6 +160,14 @@ def prepare_configuration(request, providers, catalog):
         if 'reasoning_mode' in row:route['reasoning_mode']=reasoning_mode
         if providers[pid]['adapter']=='opencode' and ('metadata_mode' in row or 'reasoning_mode' in row):
             route['send_variant']=reasoning_mode=='explicit'
+        upstream=row.get('upstream_provider', route.get('upstream_provider', ''))
+        validate_upstream(pid, providers[pid], upstream)
+        if upstream:route['upstream_provider']=upstream
+        else:route.pop('upstream_provider', None)
+        tier=row.get('service_tier', route.get('service_tier', ''))
+        validate_service_tier(pid, providers[pid], tier)
+        if tier:route['service_tier']=tier
+        else:route.pop('service_tier', None)
     for p in providers.values():
         if not p['default_model'] and p['models']:p['default_model']=next(iter(p['models']))
         if p['models'] and p['default_model'] not in p['models']:raise ValueError('Choose a remaining default model before deleting the current default.')
@@ -219,7 +228,9 @@ class Settings:
                 'efforts':[e['effort'] for e in metadata[mid]['supported_reasoning_levels']],
                 'default_effort':metadata[mid]['default_reasoning_level'],
                 'metadata_mode':route.get('metadata_mode','custom'),
-                'reasoning_mode':route.get('reasoning_mode','explicit')} for pid,p in providers.items() for mid,route in p['models'].items()]}
+                'reasoning_mode':route.get('reasoning_mode','explicit'),
+                'upstream_provider':route.get('upstream_provider',''),
+                'service_tier':route.get('service_tier','')} for pid,p in providers.items() for mid,route in p['models'].items()]}
 
     def provider_key(self, pid, pending=None):
         """Read only the selected external credential; never return it to the UI."""
@@ -371,12 +382,14 @@ class Settings:
                 if request['revision']!=self.snapshot()['revision']:raise ValueError('Settings changed; reopen the page before applying.')
                 if not getattr(self,'live_apply',None):raise ValueError('This running helper does not support live apply. No process was restarted.')
                 return self.apply_selected()
-        if set(request)=={'action','revision','provider','model'} and request['action']=='metadata':
+        if set(request)=={'action','revision','provider','model'} and request['action'] in {'metadata','upstream_providers'}:
             with self.lock:
                 current=self.snapshot()
                 if request['revision']!=current['revision']:raise ValueError('Settings changed. Reopen Better Codex before fetching metadata.')
                 pid=request['provider']
                 if not isinstance(pid,str) or pid not in current['providers']:raise ValueError('Choose a configured external provider.')
+                if request['action']=='upstream_providers':
+                    return discover_upstreams(pid, current['providers'][pid], request['model'])
                 info=self.fetch_metadata(pid,request['model'],current['providers'][pid])
                 if not hasattr(self,'metadata_cache'):self.metadata_cache={}
                 self.metadata_cache[(current['revision'],pid,request['model'])]=info

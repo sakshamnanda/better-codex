@@ -62,7 +62,7 @@ assert b'native-secret-fixture' not in prepared.body and dict(prepared.headers)[
 
 # Completed native text tools must use the same JSON wrapper as newly emitted
 # calls, across all routes and both gateway hops. They are not assistant prose.
-for model in ('zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'space-bunny-free', 'step-5-preview-free'):
+for model in ('zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', '@preset/deepseek-flash-latest', 'space-bunny-free', 'step-5-preview-free'):
     for namespace in ('functions', None):
         declared = declarations if namespace else [declarations[0]['tools'][-1], *declarations[1:]]
         native_history = copy.deepcopy(history)
@@ -73,6 +73,7 @@ for model in ('zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'sp
         original = copy.deepcopy(request)
         forwarded = core.prepare('POST', core.prefix + '/backend-api/codex/responses', headers, json.dumps(request).encode())
         wire = json.loads(forwarded.body)
+        assert any(tool['name'] == ('functions__apply_patch' if namespace else 'apply_patch') for tool in wire['tools'])
         call, output = wire['input'][:2]
         assert call['type'] == 'function_call' and call['call_id'] == output['call_id'] == 'old-patch'
         assert call['name'] == ('functions__apply_patch' if namespace else 'apply_patch')

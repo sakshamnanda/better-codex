@@ -12,6 +12,12 @@
     "nvidia/nemotron-3-ultra-550b-a55b:free": "nemotron.md",
     "space-bunny-free": "space-bunny.md",
     "step-5-preview-free": "step-5.md",
-    "zai/glm-5.3-flash": "glm-5-3-flash.md"
+    "zai/glm-5.3-flash": "glm-5-3-flash.md",
+    "z-ai/glm-5.3-flash-uncensored": "glm-5-3-flash.md",
+    "z-ai/glm-5.3-flash-cybersecurity": "glm-5-3-flash.md",
+    "zai/glm-5.3-flash-uncensored": "glm-5-3-flash.md",
+    "zai/glm-5.3-uncensored": "glm-5-3-flash.md",
+    "@preset/glm-flash-latest": "glm-5-3-flash.md",
+    "@preset/deepseek-flash-latest": "deepseek-4-1.md"
   }
 }

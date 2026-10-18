@@ -6,9 +6,25 @@
     "default_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
     "models": {
       "nvidia/nemotron-3-ultra-550b-a55b:free": {
-        "output_limit": 4096
+        "output_limit": 65536,
+        "metadata_mode": "provider",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "@preset/glm-flash-latest": {
+        "output_limit": 943718,
+        "metadata_mode": "provider",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "@preset/deepseek-flash-latest": {
+        "output_limit": 943718,
+        "metadata_mode": "provider",
+        "reasoning_mode": "explicit",
+        "enabled": true
       }
-    }
+    },
+    "enabled": true
   },
   "merge": {
     "label": "Merge Gateway",
@@ -17,23 +33,72 @@
     "default_model": "zai/glm-5.3-flash",
     "models": {
       "zai/glm-5.3-flash": {
-        "output_limit": 16384
+        "output_limit": 128000,
+        "metadata_mode": "provider",
+        "reasoning_mode": "provider_default",
+        "enabled": true
       }
-    }
+    },
+    "enabled": true
+  },
+  "nanogpt": {
+    "label": "NanoGPT",
+    "adapter": "chat_completions",
+    "endpoint": "https://nano-gpt.com/api/v1/chat/completions",
+    "default_model": "z-ai/glm-5.3-flash-uncensored",
+    "models": {
+      "z-ai/glm-5.3-flash-uncensored": {
+        "output_limit": 32768,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true,
+        "upstream_provider": "arnict"
+      }
+    },
+    "enabled": true
+  },
+  "arnict": {
+    "label": "Arnict",
+    "adapter": "chat_completions",
+    "endpoint": "https://api.arnict.com/v1/chat/completions",
+    "default_model": "zai/glm-5.3-flash-uncensored",
+    "models": {
+      "zai/glm-5.3-flash-uncensored": {
+        "output_limit": 131072,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "zai/glm-5.3-uncensored": {
+        "output_limit": 131072,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      }
+    },
+    "enabled": true
   },
   "opencode": {
     "label": "OpenCode Zen",
     "adapter": "opencode",
     "endpoint": "https://opencode.ai/zen/v1/chat/completions",
-    "default_model": "space-bunny-free",
+    "default_model": "step-5-preview-free",
     "models": {
       "step-5-preview-free": {
-        "output_limit": 4096
+        "output_limit": 65536,
+        "metadata_mode": "provider",
+        "reasoning_mode": "provider_default",
+        "send_variant": false,
+        "enabled": true
       },
       "space-bunny-free": {
-        "output_limit": 4096,
-        "send_variant": true
+        "output_limit": 524288,
+        "send_variant": false,
+        "metadata_mode": "provider",
+        "reasoning_mode": "provider_default",
+        "enabled": true
       }
-    }
+    },
+    "enabled": true
   }
 }

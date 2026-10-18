@@ -429,6 +429,9 @@ class GatewayCore:
         if PROJECT_WORKFLOW not in instructions:
             instructions += PROJECT_WORKFLOW
         forwarded["instructions"] = instructions + current_route_instructions(model, provider, self.providers) + names.delegation_guidance()
+        tier = self.models.get(model, {}).get('service_tier')
+        if provider == 'nanogpt' and tier:
+            forwarded['service_tier'] = tier
         if self.models.get(model,{}).get('reasoning_mode')=='provider_default':
             forwarded.pop('reasoning',None)
         elif isinstance(forwarded.get("reasoning"), dict):
@@ -452,7 +455,11 @@ class GatewayCore:
             raise GatewayError("Provider credential unavailable", 401) from None
         if not isinstance(key, str) or not key or any(character in key for character in "\r\n\0"):
             raise GatewayError("Provider credential unavailable", 401)
-        return PreparedRequest(provider, url, "responses", (("Authorization", "Bearer " + key), ("Content-Type", "application/json"), ("Accept", "text/event-stream")), encoded, names)
+        headers = (("Authorization", "Bearer " + key), ("Content-Type", "application/json"), ("Accept", "text/event-stream"))
+        upstream = self.models.get(model, {}).get('upstream_provider')
+        if provider == 'nanogpt' and upstream:
+            headers += (("X-Provider", upstream),)
+        return PreparedRequest(provider, url, "responses", headers, encoded, names)
 
     def native(self, headers, body, path, query, kind):
         if len(body) > MAX_BODY:

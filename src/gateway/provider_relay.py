@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 from contextlib import nullcontext
 import importlib.util
 import json
@@ -10,13 +11,14 @@ from pathlib import Path
 import re
 import subprocess
 import threading
+import time
 import tomllib
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
 from core import GatewayCore, GatewayError, MAX_BODY
-from chat_bridge import prepare_chat, response_events
+from chat_bridge import prepare_chat, response_events, stream_response_events
 from opencode_engine import OpenCodeEngine
 from provider_registry import PROVIDERS, MODELS
 
@@ -28,7 +30,10 @@ EVENTS = []
 REPORT_LOCK = threading.Lock()
 AGENTS_MARKER = "CODEX_REAL_PROVIDER_TEST_AGENTS_OK"
 BLOCKED_MODELS = {}
+PROVIDER_TIMEOUT = 120
 PUBLIC_RELAY_ERRORS = frozenset({
+    'Provider response timed out; no automatic retry was made',
+    'Provider test connection failed; no automatic retry was made',
     'Provider rejected the request format',
     'Provider rejected this request (HTTP 400); sanitized details were recorded',
     'This chat exceeds the selected provider context window. Compact it with a model that can read the current history, then switch back.',
@@ -156,8 +161,8 @@ def open_provider(prepared):
                                      headers=dict(prepared.headers), method="POST")
     request.add_header("User-Agent", "Codex-Desktop-Provider-Gateway/0.1 (local compatibility test)")
     if prepared.url.endswith("/chat/completions"):
-        request.add_header("Accept", "application/json")
-    return opener.open(request, timeout=120)
+        request.add_header("Accept", "text/event-stream")
+    return opener.open(request, timeout=PROVIDER_TIMEOUT)
 
 
 def translated_events(stream, names):
@@ -187,6 +192,9 @@ def translated_events(stream, names):
             if not isinstance(event, dict):
                 raise GatewayError("Provider returned invalid streaming data", 502)
             if event.get("type") in {"error", "response.failed", "response.incomplete"}:
+                detail = public_relay_detail(json.dumps({'error': event}).encode())
+                if detail:
+                    raise GatewayError(detail[1], 502)
                 raise GatewayError("Provider could not complete the response", 502)
             for translated in names.response_events(event):
                 yield ("data: " + json.dumps(translated) + "\n\n").encode(), translated
@@ -248,6 +256,7 @@ class RealGateway(RelayBase):
             return
         streaming = False
         event = None
+        started = time.monotonic()
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
@@ -273,7 +282,7 @@ class RealGateway(RelayBase):
             limit_output(outgoing,models[outgoing['model']])
             adapter = providers[prepared.provider]["adapter"]
             chat = adapter == "chat_completions"
-            body = json.dumps(prepare_chat(outgoing) if chat else outgoing).encode()
+            body = json.dumps(prepare_chat(outgoing, stream=True) if chat else outgoing).encode()
             from dataclasses import replace
             prepared = replace(prepared, body=body)
             event = {"model": outgoing["model"], "provider": prepared.provider,
@@ -293,15 +302,15 @@ class RealGateway(RelayBase):
                 response_context = nullcontext(None)
                 stream_events = response_events(engine.complete(outgoing), prepared.tools)
             else:
+                event['provider_stage'] = 'response_headers'
                 response_context = open_provider(prepared)
             with response_context as upstream:
                 if upstream is None:
                     pass
                 elif chat:
-                    value = upstream.read(MAX_BODY + 1)
-                    if len(value) > MAX_BODY:
-                        raise GatewayError("Provider output exceeded the test limit", 502)
-                    stream_events = response_events(json.loads(value), prepared.tools)
+                    if upstream.headers.get_content_type() != 'text/event-stream':
+                        raise GatewayError('Chat provider did not return an event stream', 502)
+                    stream_events = stream_response_events(upstream, prepared.tools)
                 elif upstream.headers.get_content_type() != "text/event-stream":
                     raise GatewayError("Provider did not return a Responses event stream", 502)
                 else:
@@ -311,6 +320,7 @@ class RealGateway(RelayBase):
                 self.send_header("Connection", "close")
                 self.end_headers()
                 streaming = True
+                event['provider_stage'] = 'response_stream'
                 completed = False
                 for frame, decoded in stream_events:
                     self.wfile.write(frame)
@@ -348,11 +358,25 @@ class RealGateway(RelayBase):
             if event is not None:
                 event["gateway_error"] = str(error)
             self.error_response(error.status, str(error), streaming)
-        except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError):
+        except (TimeoutError, urllib.error.URLError) as error:
+            timed_out = isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError)
+            if event is not None:
+                event['connection_failure'] = 'timeout' if timed_out else 'transport'
+                event['failure_type'] = type(getattr(error, 'reason', error)).__name__
+            try:
+                self.error_response(504 if timed_out else 502,
+                    'Provider response timed out; no automatic retry was made' if timed_out else 'Provider test connection failed; no automatic retry was made', streaming)
+            except OSError:
+                pass
+        except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError, http.client.HTTPException) as error:
+            if event is not None:
+                event['connection_failure'] = 'http_protocol' if isinstance(error, http.client.HTTPException) else 'transport' if isinstance(error, OSError) else 'invalid_response'
+                event['failure_type'] = type(error).__name__
             try:
                 self.error_response(502, "Provider test connection failed; no automatic retry was made", streaming)
             except OSError:
                 pass
         finally:
             if event is not None:
+                event['elapsed_seconds'] = round(time.monotonic() - started, 2)
                 save_diagnostics()

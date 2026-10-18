@@ -20,6 +20,7 @@ original = {'instructions': 'ORIGINAL_CODEX_REQUIREMENTS', 'input': [{'role': 'u
 for model in (
     'gpt-6.1-sol',
     'nvidia/nemotron-3-ultra-550b-a55b:free',
+    '@preset/deepseek-flash-latest',
     'space-bunny-free',
     'zai/glm-5.3-flash',
     'native-new-fixture',

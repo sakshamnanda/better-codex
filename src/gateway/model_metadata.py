@@ -75,6 +75,34 @@ def api_base(endpoint):
     path=re.sub(r'/(?:responses|chat/completions)/?$','',parsed.path)
     return urlunsplit((parsed.scheme,parsed.netloc,path.rstrip('/'),'',''))
 
+
+def discover_upstreams(provider, definition, model_id, read=get_json):
+    from provider_registry import require_nanogpt, validate_upstream, validate_service_tier
+    require_nanogpt(provider, definition)
+    if not valid_model_id(model_id, provider):raise ValueError('Enter a valid model ID.')
+    parsed=urlsplit(definition['endpoint'])
+    url=urlunsplit((parsed.scheme, parsed.netloc, '/api/models/'+quote(model_id, safe='')+'/providers', '', ''))
+    value=read(url, '')
+    if type(value.get('supportsProviderSelection')) is not bool:raise ValueError('NanoGPT did not report provider-selection support.')
+    rows=value.get('providers', [])
+    if not isinstance(rows, list) or len(rows)>256:raise ValueError('Unexpected NanoGPT provider list.')
+    providers=[]
+    for row in rows:
+        if not isinstance(row, dict):raise ValueError('Unexpected NanoGPT provider entry.')
+        pid=row.get('provider')
+        validate_upstream(provider, definition, pid)
+        if not pid:raise ValueError('Missing NanoGPT provider ID.')
+        providers.append({'id':pid, 'available':row.get('available') is True})
+    catalog=read(api_base(definition['endpoint'])+'/models?detailed=true', '')
+    entries=catalog.get('data', [])
+    if not isinstance(entries,list):raise ValueError('Unexpected NanoGPT model catalog.')
+    entry=next((e for e in entries if isinstance(e,dict) and e.get('id')==model_id), {})
+    tiers=entry.get('supported_service_tiers', [])
+    if not isinstance(tiers,list) or len(tiers)>5:raise ValueError('Unexpected NanoGPT service tiers.')
+    for tier in tiers:validate_service_tier(provider, definition, tier)
+    return {'supported':value['supportsProviderSelection'], 'providers':providers if value['supportsProviderSelection'] else [],
+            'service_tiers':list(dict.fromkeys(tiers))}
+
 def discover(provider,definition,model_id,key,read=get_json):
     if not valid_model_id(model_id,provider):raise ValueError('Enter a valid model ID, or an OpenRouter @preset/slug.')
     base=api_base(definition['endpoint']);host=urlsplit(base).hostname

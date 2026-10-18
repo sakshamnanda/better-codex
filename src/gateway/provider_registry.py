@@ -5,6 +5,23 @@ import re
 from urllib.parse import urlsplit
 
 
+def require_nanogpt(provider_id, provider):
+    if (provider_id != 'nanogpt' or provider['adapter'] != 'chat_completions' or
+                  provider['endpoint'] not in {'https://nano-gpt.com/api/v1/chat/completions', 'https://api.nano-gpt.com/api/v1/chat/completions'}):
+        raise ValueError('These routing options are supported only for NanoGPT')
+
+
+def validate_upstream(provider_id, provider, value):
+    if not isinstance(value, str) or (value and not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', value)):
+        raise ValueError('Invalid upstream provider ID')
+    if value:require_nanogpt(provider_id, provider)
+
+
+def validate_service_tier(provider_id, provider, value):
+    if not isinstance(value, str) or value not in {'', 'auto', 'default', 'flex', 'fast', 'priority'}:
+        raise ValueError('Invalid service tier')
+    if value:require_nanogpt(provider_id, provider)
+
 def public_catalog(catalog,providers=None):
     """Keep retired metadata for instruction mappings, never advertise it."""
     disabled={mid for p in (providers or {}).values() for mid,route in p['models'].items()
@@ -43,8 +60,10 @@ def load_registry(directory):
             if model_id in seen or model_id not in metadata:
                 raise ValueError('Model must have unique routing and catalog metadata')
             seen.add(model_id)
-            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant','metadata_mode','reasoning_mode','enabled'}:
+            if not isinstance(settings, dict) or set(settings) - {'output_limit', 'send_variant','metadata_mode','reasoning_mode','enabled','upstream_provider','service_tier'}:
                 raise ValueError('Unexpected model route configuration')
+            validate_upstream(provider_id, provider, settings.get('upstream_provider', ''))
+            validate_service_tier(provider_id, provider, settings.get('service_tier', ''))
             if type(settings.get('enabled',True)) is not bool:raise ValueError('Model enabled must be a boolean')
             if settings.get('metadata_mode','custom') not in {'provider','custom'} or settings.get('reasoning_mode','explicit') not in {'explicit','provider_default'}:
                 raise ValueError('Invalid model metadata mode')

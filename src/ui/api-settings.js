@@ -57,11 +57,27 @@
       efforts:info.efforts??[`none`],default_effort:info.efforts?.includes(model.default_effort)?model.default_effort:info.default_effort??`none`,
       reasoning_mode:info.efforts?`explicit`:`provider_default`,metadataNotes:info.notes.join(` `),metadataModelId:model.id};
   }
+  function upstreamChoices(model, info) {
+    const options=[{value:``,label:`Automatic`}];
+    for(const p of info?.providers??[])options.push({value:p.id,label:p.id+(p.available?``:` (unavailable)`),disabled:!p.available});
+    if(model.upstream_provider&&!options.some(p=>p.value===model.upstream_provider))
+      options.push({value:model.upstream_provider,label:model.upstream_provider+` (saved; refresh availability)`});
+    return options;
+  }
+  function serviceTierChoices(model, info) {
+    const labels={auto:`Automatic`,default:`Standard`,flex:`Flex`,fast:`Fast`,priority:`Priority`};
+    const options=[{value:``,label:`Automatic`}];
+    for(const tier of info?.service_tiers??[])if(tier&&tier!==`auto`)options.push({value:tier,label:labels[tier]??tier});
+    if(model.service_tier&&!options.some(p=>p.value===model.service_tier))
+      options.push({value:model.service_tier,label:(labels[model.service_tier]??model.service_tier)+` (saved; refresh support)`});
+    return options;
+  }
   function requestBody(snapshot,draft) {
     return {action:`save`,revision:snapshot.revision,
       providers:Object.fromEntries(Object.entries(draft.providers).map(([id,p])=>[id,{label:p.label,adapter:p.adapter,endpoint:p.endpoint,default_model:p.default_model,enabled:p.enabled!==false}])),
       models:draft.models.map(m=>({id:m.id,provider:m.provider,label:m.label,context:Number(m.context),output:Number(m.output),enabled:m.enabled!==false,
-        efforts:m.efforts,default_effort:m.default_effort,metadata_mode:m.metadata_mode??`custom`,reasoning_mode:m.reasoning_mode??`explicit`})),
+        efforts:m.efforts,default_effort:m.default_effort,metadata_mode:m.metadata_mode??`custom`,reasoning_mode:m.reasoning_mode??`explicit`,
+        ...(m.provider===`nanogpt`?{upstream_provider:m.upstream_provider??``,service_tier:m.service_tier??``}:{})})),
       keys:Object.fromEntries(Object.entries(draft.keys).map(([id,p])=>[id,{active:p.active,profiles:p.profiles.map(k=>({id:k.id,label:k.label.trim(),key:k.key}))}]))};
   }
   function removeEntry(draft,item) {
@@ -102,6 +118,7 @@
     const [editor,setEditor] = li.useState(null);
     const [sensitiveFocus,setSensitiveFocus] = li.useState(false);
     const [newKey,setNewKey] = li.useState(null);
+    const [upstreamLists,setUpstreamLists] = li.useState({});
     const latest = li.useRef(null);
     const keyDraft = li.useRef(null);
     latest.current=draft;
@@ -139,6 +156,20 @@
         const info=await globalThis.gatewaySettingsRequest({action:`metadata`,revision:snapshot.revision,provider:pid,model:model.id.trim()});
         setDraft(previous=>{const next=structuredClone(previous);if(next.models[index]?.id===model.id&&next.models[index].provider===pid)next.models[index]=applyMetadata(next.models[index],info);return next});
         setDirty(true);setStatus(info.notes.join(` `)||`Provider metadata loaded.`);
+      } catch(error){setFailed(true);setStatus(error.message)}
+      finally {setBusy(false)}
+    }
+    async function fetchUpstreams(index) {
+      const model=latest.current?.models[index];
+      if(busy||model?.provider!==`nanogpt`||!model.id.trim())return;
+      if(latest.current.providers.nanogpt.endpoint!==snapshot.providers.nanogpt?.endpoint) {
+        setStatus(`Finish saving the NanoGPT address before loading providers.`);setFailed(true);return;
+      }
+      setBusy(true);setStatus(`Loading NanoGPT providers and tiers…`);setFailed(false);
+      try {
+        const info=await globalThis.gatewaySettingsRequest({action:`upstream_providers`,revision:snapshot.revision,provider:`nanogpt`,model:model.id.trim()});
+        setUpstreamLists(previous=>({...previous,[model.id]:info}));
+        setStatus(info.supported?`Providers and supported tiers loaded.`:`Supported tiers loaded. NanoGPT does not support provider selection for this model.`);
       } catch(error){setFailed(true);setStatus(error.message)}
       finally {setBusy(false)}
     }
@@ -350,9 +381,17 @@
               e(Field,{label:`Model ID`,value:model.id,autoFocus:!existing,placeholder:pid===`openrouter`?`vendor/model or @preset/slug`:`Provider model ID`,readOnly:existing,disabled:busy,
                 onBlur:!existing&&model.metadataModelId!==model.id?()=>fetchMetadata(index):undefined,onChange:value=>edit(next=>{
                   next.models[index].id=value.trim();
+                  next.models[index].upstream_provider=``;
+                  next.models[index].service_tier=``;
                   if(automatic)Object.assign(next.models[index],{context:``,output:``,efforts:[],default_effort:``,metadataNotes:``,metadataModelId:null});
                 })}),
               e(Field,{label:`Display name`,value:model.label,autoFocus:existing,disabled:busy,onChange:value=>change(`label`,value)}),
+              pid===`nanogpt`?menuRow(`Upstream provider`,upstreamChoices(model,upstreamLists[model.id]),model.upstream_provider??``,value=>change(`upstream_provider`,value),
+                `Applies to this model across chats. Automatic uses NanoGPT routing. Explicit selection uses pay-as-you-go billing and bypasses subscription coverage.`):null,
+              pid===`nanogpt`?menuRow(`Service tier`,serviceTierChoices(model,upstreamLists[model.id]),model.service_tier??``,value=>change(`service_tier`,value),
+                `Automatic sends no tier override. Flex uses lower-cost, variable-capacity processing; Fast/Priority can cost more. A forced provider may ignore an unsupported tier.`):null,
+              pid===`nanogpt`?e(SettingsRow,{label:`Routing options`,description:`Load current provider IDs and supported service tiers for this model. A selected provider may have different limits or availability.`,
+                control:button(`Load providers and tiers`,()=>fetchUpstreams(index),busy||!model.id.trim())}):null,
               menuRow(`Limits and capabilities`,[{value:`provider`,label:`From provider`},{value:`custom`,label:`Customize`}],model.metadata_mode??`custom`,value=>{
                 change(`metadata_mode`,value);
                 if(value===`provider`)setStatus(`Use Refresh metadata to fetch the provider’s reported values. Routine saves keep the saved limits.`);
@@ -406,5 +445,5 @@
         }},`Delete`)))));
     return e(li.Fragment,null,e(GatewaySettingsPage,{title:labels[section]??labels.providers,subtitle:`Better Codex`,footer,scrollResetKey:section},content),editorDialog,confirmation,deleteConfirmation);
   };
-  globalThis.gatewayNativeSettingsControls = {DialogLayout,SettingsRow,Action,Dropdown,Field,Section,ProviderDisclosure,makeDraft,requestBody,clearKeys,newModel,applyMetadata,removeEntry,completeDraft};
+  globalThis.gatewayNativeSettingsControls = {DialogLayout,SettingsRow,Action,Dropdown,Field,Section,ProviderDisclosure,makeDraft,requestBody,clearKeys,newModel,applyMetadata,upstreamChoices,serviceTierChoices,removeEntry,completeDraft};
 })();
