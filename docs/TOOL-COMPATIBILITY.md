@@ -20,13 +20,19 @@ External models select tools; the installed Codex runtime executes them. The gat
 | Native patches | Exact text/stream round trips; installed runtime reaches its native handler and enforces its sandbox policy | No live project edited by an external model here |
 | MCP discovery/calls | Installed runtime discovers and executes an owned read-only MCP with local mock inference | Each connected app has its own permissions/availability |
 | ChatGPT tunnels | Client function schemas/namespaces and credential boundary checked offline | Actual user tunnel not invoked; end-to-end parity unverified |
-| Subagents | Installed runtime advertises V2 contracts; real GLM requests a new worker after a synthetic closed-worker error in V1 and V2 | No real child created/messaged; model reliability not guaranteed |
+| Subagents | Real OpenRouter GLM delegated to `gpt-6.1-sol` with high reasoning; the child completed and GLM received its result on 2026-10-17 | Synthetic task in an isolated runtime; model reliability not guaranteed |
 | Cross-chat messages | Real sender delivery confirmed; native received-message shape reproduced with Merge, then real GLM acknowledged translated synthetic context | Actual recipient retry after loading the fix remains unverified |
 | Instructions/model switches | Original context preserved; matching profile supplied once per request | Delivery cannot force perfect obedience |
 | Categories/effort | Existing picker checks pass; native callbacks retained | Effort support remains model-specific |
 | OpenAI-hosted tools and attachments | Unsupported forms rejected | Text-only external routes do not acquire hosted search, file search, computer use, image generation or encrypted native reasoning |
 
 External models retain `tool_mode: direct`: JSON schemas instead of ChatGPT's code-mode-only entry point, with native executors and permissions. Identical model decisions and every OpenAI-hosted feature are not promised.
+
+Codex `wait_threads` accepts integer `timeoutMs` values from 0 to 120000 (two minutes), confirmed in the supported 26.1013.4894 desktop validator. External models receive that limit in shared guidance and the tool schema. The gateway caps oversized integer waits before returning them to Codex, keeping streamed arguments and completed calls consistent. Targets and cursors stay intact; repeated bounded waits can follow longer work. Native requests and unrelated tools are unchanged.
+
+The installed runtime places external delegation messages in an `encrypted_content` slot even though their tool arguments are plaintext. Forwarding that slot to ChatGPT causes the child stream to close before `response.completed`. The outer gateway now recognizes exact messages returned by external delegation tools using a bounded in-memory hash record and restores their text content before routing the child. Genuine native ciphertext and unknown content remain unchanged. After a helper restart, send a new delegation rather than retrying an old handoff whose provenance is no longer in memory.
+
+`python tests/check-delegation-runtime.py --unfixed` reproduces the failure with the installed backend and localhost mocks. The default run verifies the repair offline. `--live` explicitly uses saved credentials for a synthetic GLM-to-native delegation, verifies high reasoning on the native request, and requires both the child result and GLM's final acknowledgement. It uses an isolated scratch profile and does not read existing chats or restart the desktop.
 
 ## ChatGPT tunnels
 
@@ -44,6 +50,7 @@ The shared external-model workflow now explicitly requires reading the current p
 
 ```powershell
 python tests/check-delegation-tools.py
+python tests/check-chat-waits.py
 python tests/check-tool-compatibility.py
 python tests/check-retired-tool-history.py
 python tests/check-cross-chat-context.py

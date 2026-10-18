@@ -6,12 +6,18 @@ Windows Codex desktop custom providers, using the original installed signed app 
 
 - A local inference gateway chooses the provider from each request's model ID. ChatGPT uses its normal signed-in service; Nemotron uses OpenRouter; Space Bunny uses the genuine isolated OpenCode client. Models remain independent between chats.
 - Merge Gateway adds `zai/glm-5.3-flash` through its OpenAI-compatible Responses endpoint, with a separate Merge key. Replies and Codex tool use have been verified in the signed desktop setup; each account still needs model access and credit.
-- The original model/effort controls gain ChatGPT, OpenRouter, Merge Gateway and OpenCode Zen categories. A version-checked static UI resource is supplied in memory over private inherited pipes. Package files, signatures, security fuses and permissions remain intact. There is no debugging network port.
+- Arnict adds GLM 5.3 Flash Abliterated and GLM 5.3 Abliterated through Chat Completions, with a separate Arnict key. Add the key under **Settings → Better Codex → Providers → Arnict → API keys**. Live compatibility still needs verification; see [provider setup](docs/PROVIDERS.md).
+- The original model/effort controls gain ChatGPT, OpenRouter, Merge Gateway, NanoGPT, Arnict and OpenCode Zen categories. A version-checked static UI resource is supplied in memory over private inherited pipes. Package files, signatures, security fuses and permissions remain intact. There is no debugging network port.
 - A Windows package-context launcher starts the actual installed executable. Backed-up user settings point to the local gateway and dynamic model discovery while it runs. Closing the app restores ordinary settings; manual rollback is also provided.
 - Codex retains tool execution, approvals, project instructions and chat history. The OpenCode helper returns data-only tool requests; it does not execute the caller's shell commands itself. Cross-provider history is normalized, and private native authentication is not sent to external providers.
-- For external models, `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. Native ChatGPT manual and automatic compaction use the ordinary native stream without requiring a portable summary. The saved transcript and native rollback checkpoint remain intact.
+- For external models, `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The checkpoint uses low reasoning independently of the external model's setting, including **Provider default**. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. Native ChatGPT manual and automatic compaction use the ordinary native stream without requiring a portable summary. The saved transcript and native rollback checkpoint remain intact.
+- External models automatically trigger this same compaction flow at 128,000 tokens, or 80% of their context capacity for smaller models. An existing lower model threshold is retained. This reduces repeated history without changing the advertised context capacity or native ChatGPT thresholds. It is a compaction trigger, not a hard request-size cap: a large input or tool result can exceed it. Compaction needs your ChatGPT sign-in and adds checkpoint/summary requests; summaries can omit details, so file evidence may need to be read again. The updated helper and a model refresh or next launch are needed to advertise the threshold.
 
 This is a tested local customization, not an official provider-picker extension. Updates require a compatibility review; source/hash guards refuse unknown builds.
+
+NanoGPT streams Chat Completions text as it arrives. Tool-call fragments are assembled and validated before execution; reasoning stays private and remains available for tool continuation. Provider usage can include reasoning or tool calls without a visible answer. External timeouts and transport failures return an explicit error; the desktop-facing gateway uses a non-retryable HTTP response before streaming starts to avoid repeating billable requests. Failures after streaming starts emit an error event instead of silently dropping the connection. A bounded, process-local fingerprint guard blocks one identical retry within 30 seconds after a stream fails, preventing the desktop from repeating inference automatically. The provider's original status remains in local diagnostics.
+
+The reviewed Windows builds are `26.1007.2314.0` and `26.1013.4894.0`. The latter has new renderer bundles and native settings bindings, verified against pinned source hashes. A Store update can leave the old package directory present after removing its executable; the custom launcher then needs a staged replacement for the new build. Recreating `.codex` does not update this integration. Pending replacements check both package roots for running processes before switching on the next custom launch.
 
 ## Use
 
@@ -24,6 +30,8 @@ The custom Desktop and Start menu shortcuts target Windows PowerShell with the p
 For rollback, close Codex and run `scripts/Rollback.cmd`. Sign-in and chat databases are retained. Select a ChatGPT model before continuing an external-model chat through the ordinary launcher.
 
 Open **Settings -> Better Codex -> Providers** or **Models**. Provider cards have native enable switches; **Edit** opens a themed popup for their URL and default model. **API keys** expands directly on the provider card. ChatGPT keeps the app's sign-in; the verified OpenCode endpoint stays fixed.
+
+The chat picker lists providers without the Better Codex settings links. New chats start with ChatGPT's **Default** model selection on the reviewed 26.1013 build. Existing chats and model changes made within a new chat keep their selections.
 
 Models are grouped by provider and searchable by name or API ID. **Edit** and **Add model** open native popups for capabilities and reasoning options. Each model has an enable switch. Disabling retains configuration, instructions and encrypted keys, while hiding disabled models from the picker and blocking new requests. Running responses keep their original settings. Another enabled model becomes the default when available.
 
@@ -81,10 +89,14 @@ python tests/check-catalog-refresh.py
 python tests/check-catalog-runtime.py
 python tests/check-rollback.py
 python tests/check-provider-registry.py
+python tests/check-arnict.py
 python tests/check-model-profiles.py
 python tests/check-opencode-relay.py
 python tests/check-delegation-tools.py
+python tests/check-delegation-handoffs.py
+python tests/check-delegation-runtime.py
 python tests/check-tool-compatibility.py
+python tests/check-reasoning-stream.py
 python tests/check-retired-tool-history.py
 python tests/check-cross-chat-context.py
 python tests/check-provider-errors.py
