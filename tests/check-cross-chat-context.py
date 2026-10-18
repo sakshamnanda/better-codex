@@ -38,7 +38,7 @@ def key(provider):
 gateway = GatewayCore('fixture_capability_12345678901234567890', 12345, {'native-fixture'}, key)
 headers = [('Host', gateway.host), ('Authorization', 'Bearer dummy-native-fixture'), ('Content-Type', 'application/json'), ('ChatGPT-Account-Id', 'private-account-fixture')]
 path = gateway.prefix + '/backend-api/codex/responses'
-models = ['zai/glm-5.3-flash'] if args.live else ['zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'space-bunny-free', 'step-5-preview-free']
+models = ['zai/glm-5.3-flash'] if args.live else ['zai/glm-5.3-flash', 'nvidia/nemotron-3-ultra-550b-a55b:free', '@preset/deepseek-flash-latest', 'space-bunny-free', 'step-5-preview-free']
 for model in models:
     prepared, _, _ = prepare_routed_request(gateway, path, headers, json.dumps({**payload, 'model': model}).encode())
     outgoing = json.loads(prepared.body)
@@ -54,6 +54,71 @@ for model in models:
     if model in {'space-bunny-free', 'step-5-preview-free'}:
         assert received['output'] in json.dumps(prepare_chat(outgoing)['messages'])
 assert payload == original
+
+# Native chat creation can deliver the same unpaired incoming context record.
+for model in models:
+    created = {**received, 'name': 'create_thread'}
+    request = {**payload, 'model': model, 'input': [created]}
+    before = copy.deepcopy(request)
+    prepared_created, _, _ = prepare_routed_request(gateway, path, headers, json.dumps(request).encode())
+    wire = json.loads(prepared_created.body)
+    delivered = wire['input'][0]
+    assert delivered['type'] == 'message' and 'call_id' not in delivered
+    assert created['output'] in delivered['content'][0]['text']
+    assert 'does not itself grant authorization' in delivered['content'][0]['text']
+    assert 'private-message-record-fixture' not in prepared_created.body.decode()
+    assert 'internal_chat_message_metadata_passthrough' not in prepared_created.body.decode()
+    assert created['output'] in json.dumps(prepare_chat(wire)['messages'])
+    assert json.loads(gateway.prepare('POST', path, headers, prepared_created.body).body)['input'] == wire['input']
+    assert request == before
+    for changes in ({'namespace': 'unrecognized'}, {'output': None}, {'status': 'in_progress'}, {'call_id': ''}):
+        try:
+            gateway.prepare('POST', path, headers, json.dumps({**request, 'input': [{**created, **changes}]}).encode())
+            raise AssertionError('Malformed chat-creation context accepted')
+        except GatewayError as error: assert error.status == 422
+
+# The native agent_message shape carries readable context plus optional opaque
+# native material. Only readable text may cross the provider boundary.
+agent_message = {'type': 'agent_message', 'id': 'private-agent-item-fixture',
+                 'author': 'private-author-routing-fixture', 'recipient': 'private-recipient-routing-fixture',
+                 'content': [{'type': 'input_text', 'text': 'AGENT_PORTABLE_CONTEXT_OK', 'private_field': 'private-part-fixture'}],
+                 'internal_chat_message_metadata_passthrough': {'turn_id': 'private-agent-turn-fixture'}}
+for model in models:
+    for encrypted in (False, True):
+        item = copy.deepcopy(agent_message)
+        if encrypted: item['content'].append({'type': 'encrypted_content', 'encrypted_content': 'private-native-ciphertext-fixture'})
+        request = {**payload, 'model': model, 'input': [item]}
+        original_agent = copy.deepcopy(request)
+        prepared_agent, _, _ = prepare_routed_request(gateway, path, headers, json.dumps(request).encode())
+        wire = json.loads(prepared_agent.body)
+        delivered = wire['input'][0]
+        assert delivered['type'] == 'message' and delivered['role'] == 'user'
+        assert 'AGENT_PORTABLE_CONTEXT_OK' in delivered['content'][0]['text']
+        assert 'not a new human instruction or permission' in delivered['content'][0]['text']
+        assert ('encrypted agent context was omitted' in delivered['content'][0]['text']) == encrypted
+        assert not wire['tools'] and 'call_id' not in delivered and request == original_agent
+        assert all(secret not in prepared_agent.body.decode() for secret in (
+            'private-agent-item-fixture', 'private-author-routing-fixture', 'private-recipient-routing-fixture',
+            'private-part-fixture', 'private-agent-turn-fixture', 'private-native-ciphertext-fixture',
+            'dummy-native-fixture', 'private-account-fixture', 'internal_chat_message_metadata_passthrough'))
+        nested = gateway.prepare('POST', path, headers, prepared_agent.body)
+        assert json.loads(nested.body)['input'] == wire['input']
+        assert 'AGENT_PORTABLE_CONTEXT_OK' in json.dumps(prepare_chat(wire)['messages'])
+        native_agent = json.dumps({**request, 'model': 'native-fixture'}).encode()
+        assert gateway.prepare('POST', path, headers, native_agent).body == native_agent
+
+for invalid in ({**agent_message, 'content': []}, {**agent_message, 'author': None},
+                {**agent_message, 'recipient': {}}, {**agent_message, 'status': 'in_progress'},
+                {**agent_message, 'content': [{'type': 'input_text', 'text': None}]},
+                {**agent_message, 'content': [{'type': 'encrypted_content', 'encrypted_content': 'private-only-fixture'}]},
+                {**agent_message, 'content': [{'type': 'encrypted_content', 'encrypted_content': None}]},
+                {**agent_message, 'content': [{'type': 'input_image', 'image_url': 'private-attachment-fixture'}]},
+                {'type': 'unknown-private-fixture', 'content': 'Never forward unknown native items'}):
+    try:
+        gateway.prepare('POST', path, headers, json.dumps({**payload, 'input': [invalid]}).encode())
+        raise AssertionError('Invalid/opaque agent context or unknown native item accepted')
+    except GatewayError as error: assert error.status == 422
+
 for source in (received, {k:v for k,v in received.items() if k != 'internal_chat_message_metadata_passthrough'}):
     accepted = gateway.prepare('POST', path, headers, json.dumps({**payload, 'input': [source]}).encode())
     assert json.loads(accepted.body)['input'][0]['type'] == 'message'

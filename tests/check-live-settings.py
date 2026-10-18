@@ -78,7 +78,7 @@ try:
  service.ROOT=current
  instance=object.__new__(service.Service);instance.current=current;instance.engine=None;instance.catalog_pending=False
  instance.reload_lock=threading.Lock();instance.reload_gate=ReloadGate()
- instance.relay=SimpleNamespace(catalog=registry.public_catalog(catalog),opencode_engine=None);instance.gateway=SimpleNamespace(external_models=[])
+ instance.relay=SimpleNamespace(catalog=registry.public_catalog(catalog,providers),opencode_engine=None);instance.gateway=SimpleNamespace(external_models=[])
  initial_p,initial_m,initial_r=registry.load_registry(current)
  registry.PROVIDERS.clear();registry.PROVIDERS.update(initial_p)
  registry.MODELS.clear();registry.MODELS.update(initial_m)
@@ -97,13 +97,13 @@ try:
  registry.PROVIDERS.clear();registry.PROVIDERS.update(initial_p)
  registry.MODELS.clear();registry.MODELS.update(initial_m)
  registry.ROUTES.clear();registry.ROUTES.update(initial_r);mixed.EXTERNAL.clear();mixed.EXTERNAL.update(initial_r)
- instance.relay.catalog=registry.public_catalog(catalog)
+ instance.relay.catalog=registry.public_catalog(catalog,providers)
  cache_path=scratch/'models_cache.json';publisher=CatalogCache(cache_path,scratch/'catalog-backups')
- _,etag=publisher.describe(registry.public_catalog(catalog),'0.162.0')
- cache_path.write_text(json.dumps({'etag':etag,'identity':'owned-native-scope','client_version':'0.162.0','fetched_at':'2026-10-15T00:00:00Z','models':registry.public_catalog(catalog)['models']}))
+ _,etag=publisher.describe(registry.public_catalog(catalog,providers),'0.162.0')
+ cache_path.write_text(json.dumps({'etag':etag,'identity':'owned-native-scope','client_version':'0.162.0','fetched_at':'2026-10-15T00:00:00Z','models':registry.public_catalog(catalog,providers)['models']}))
  instance.catalog_cache=publisher
  instance.settings_generations=SettingsGenerations(RequestSettings(copy.deepcopy((initial_p,initial_m,initial_r)),
-     copy.deepcopy(mixed.PROFILE_SETTINGS),dict(mixed.PROFILES),registry.public_catalog(catalog),current/'gateway'),instance.retire_engine)
+     copy.deepcopy(mixed.PROFILE_SETTINGS),dict(mixed.PROFILES),registry.public_catalog(catalog,providers),current/'gateway'),instance.retire_engine)
  with instance.settings_generations.request() as (old_token,old_snapshot):
   # The actual service publication and cache refresh must both finish while an
   # existing native/external response still holds its original settings lease.

@@ -3,7 +3,9 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit,parse_qs
 from contextlib import nullcontext
+from collections import OrderedDict
 import hashlib
+import http.client
 import importlib.util
 import argparse
 import json
@@ -13,6 +15,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -35,6 +38,65 @@ EXTERNAL = set(ROUTES)
 DUMMY = 'sk-offline-local-test-only-no-real-provider-access'
 EVENTS = []
 LOCK = threading.Lock()
+PLAINTEXT_HANDOFFS = OrderedDict()
+HANDOFF_LOCK = threading.Lock()
+FAILED_EXTERNAL_STREAMS = OrderedDict()
+FAILURE_LOCK = threading.Lock()
+
+
+def desktop_external_event(event):
+    """Keep external reasoning out of the desktop stream and saved history."""
+    # Content-part completion repeats reasoning even when its deltas are hidden.
+    if (event.get('type', '').startswith('response.reasoning')
+            or event.get('item', {}).get('type') == 'reasoning'
+            or event.get('part', {}).get('type') in {'reasoning_text', 'summary_text'}):
+        return None
+    response = event.get('response')
+    if isinstance(response, dict) and isinstance(response.get('output'), list):
+        return {**event, 'response': {**response, 'output': [item for item in response['output'] if item.get('type') != 'reasoning']}}
+    return event
+
+
+def remember_external_handoffs(event):
+    """Recognize only plaintext arguments actually returned by external tools."""
+    if event.get('type') == 'response.output_item.done': items = [event.get('item')]
+    elif event.get('type') == 'response.completed':
+        response = event.get('response')
+        items = response.get('output', []) if isinstance(response, dict) else []
+    else: return
+    if not isinstance(items, list): return
+    for item in items:
+        if (not isinstance(item, dict) or item.get('type') != 'function_call'
+                or item.get('namespace') not in {None, 'collaboration', 'multi_agent_v1', 'functions'}
+                or item.get('name') not in {'spawn_agent', 'followup_task', 'send_message', 'send_input'}
+                or item.get('encrypted_function_args') is not None):
+            continue
+        try: message = json.loads(item.get('arguments', '')).get('message')
+        except (ValueError, TypeError, AttributeError): continue
+        if not isinstance(message, str) or not message.strip(): continue
+        digest = hashlib.sha256(message.encode('utf-8')).digest()
+        with HANDOFF_LOCK:
+            PLAINTEXT_HANDOFFS[digest] = None
+            PLAINTEXT_HANDOFFS.move_to_end(digest)
+            # shortcut: bounded process-local provenance; old handoffs need a new send after restart.
+            if len(PLAINTEXT_HANDOFFS) > 1024: PLAINTEXT_HANDOFFS.popitem(last=False)
+
+
+def normalize_agent_handoffs(history):
+    if not isinstance(history, list): return history
+    normalized = []
+    for item in history:
+        if isinstance(item, dict) and item.get('type') == 'agent_message' and isinstance(item.get('content'), list):
+            content = []
+            for part in item['content']:
+                text = part.get('encrypted_content') if isinstance(part, dict) and part.get('type') == 'encrypted_content' else None
+                with HANDOFF_LOCK:
+                    known = isinstance(text, str) and hashlib.sha256(text.encode('utf-8')).digest() in PLAINTEXT_HANDOFFS
+                # The runtime labels unencrypted external tool messages as ciphertext.
+                content.append({'type': 'input_text', 'text': text} if known else part)
+            item = {**item, 'content': content}
+        normalized.append(item)
+    return normalized
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -42,10 +104,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise GatewayError('Upstream redirects are not accepted', 502)
 
 
-def open_upstream(url, headers, body=None):
+def open_upstream(url, headers, body=None, *, timeout=120):
     # Fresh TLS connection to a fixed origin; inherited proxies are ignored.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    return opener.open(urllib.request.Request(url, headers=dict(headers), data=body), timeout=120)
+    return opener.open(urllib.request.Request(url, headers=dict(headers), data=body), timeout=timeout)
 
 
 def record(event):
@@ -85,8 +147,13 @@ def prepare_routed_request(core, target, headers, body, profile_settings=None, p
                 raise GatewayError('Portable compaction requires the signed-in ChatGPT compaction model',422)
             # This is a checkpoint operation only. The desktop's selected model
             # and native per-thread settings remain untouched.
-            incoming = {**incoming,'model':COMPACTION_MODEL}
+            reasoning = incoming.get('reasoning')
+            if reasoning is not None and not isinstance(reasoning,dict): raise GatewayError('Invalid compaction reasoning',422)
+            # Provider-default effort can be none; the native checkpoint needs low or above.
+            incoming = {**incoming,'model':COMPACTION_MODEL,'reasoning':{**(reasoning or {}),'effort':'low'}}
     if incoming['model'] in external or incoming['model'] in core.native_models:
+        if isinstance(incoming.get('input'), list):
+            incoming = {**incoming, 'input': normalize_agent_handoffs(incoming['input'])}
         incoming = apply_profile(incoming, profile_settings, profiles)
         headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
         body = json.dumps(incoming).encode()
@@ -152,6 +219,27 @@ class MixedGateway(BaseHTTPRequestHandler):
         settings=getattr(self,'runtime_settings',None)
         return GatewayCore(self.server.capability, self.server.server_port, self.server.native_models,
                            lambda _provider: 'synthetic-key-for-local-validation-only',registry=settings.registry if settings else None)
+
+    def request_failure(self, status, message, streaming, event, code='replica_gateway_error'):
+        external = event is not None and event.get('provider') != 'openai'
+        if not streaming:
+            # The desktop retries 5xx responses, issuing another billable request.
+            self.fail(400 if external and status in {408, 502, 504} else status, message, code=code)
+        elif external:
+            digest = getattr(self, 'external_request_digest', None)
+            if digest is not None:
+                # Codex retries stream errors even after a terminal failure event.
+                with FAILURE_LOCK:
+                    FAILED_EXTERNAL_STREAMS[digest] = (time.monotonic(), code, message)
+                    FAILED_EXTERNAL_STREAMS.move_to_end(digest)
+                    if len(FAILED_EXTERNAL_STREAMS) > 128:
+                        FAILED_EXTERNAL_STREAMS.popitem(last=False)
+            payload = {'type': 'error', 'code': code, 'message': message}
+            try:
+                self.wfile.write(('data: ' + json.dumps(payload) + '\n\n').encode())
+                self.wfile.flush()
+            except OSError:
+                pass
 
     def catalog_header(self):
         publisher=getattr(self.server,'catalog_cache',None)
@@ -234,6 +322,7 @@ class MixedGateway(BaseHTTPRequestHandler):
     def _post(self):
         streaming = False
         event = None
+        started = time.monotonic()
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY: raise GatewayError('Invalid request size', 413)
@@ -248,14 +337,24 @@ class MixedGateway(BaseHTTPRequestHandler):
             if removed: event['openai_hosted_search_declarations_removed'] = removed
             record(event)
             if prepared.provider != 'openai':
+                identity = json.dumps([self.headers.get('thread-id'), self.headers.get('x-client-request-id')]).encode()
+                self.external_request_digest = hashlib.sha256(identity + prepared.body).digest()
+                with FAILURE_LOCK:
+                    failed = FAILED_EXTERNAL_STREAMS.pop(self.external_request_digest, None)
+                if failed is not None and time.monotonic() - failed[0] < 30:
+                    # Stop one immediate replay locally; deliberate later retries work.
+                    event['failed_stream_retry_blocked'] = True
+                    record(event)
+                    self.fail(400, failed[2], code=failed[1])
+                    return
                 # The existing real service receives only its dummy local bearer.
                 # It holds the DPAPI provider keys and strips native private fields.
-                upstream = open_upstream(self.server.external_url, external_headers(getattr(self,'generation_token',None)), prepared.body)
+                # Let the inner relay return its provider timeout before this hop expires.
+                upstream = open_upstream(self.server.external_url, external_headers(getattr(self,'generation_token',None)), prepared.body, timeout=external_adapter.PROVIDER_TIMEOUT + 30)
             else:
                 if prepared.provider != 'openai': raise GatewayError('Model is not allowed in this replica', 422)
                 upstream = open_upstream(prepared.url, prepared.headers, prepared.body)
             with upstream:
-                streaming = True
                 if prepared.kind == 'compaction':
                     if upstream.headers.get_content_type() not in {'text/event-stream','text/plain'}: raise GatewayError('Native checkpoint did not return an event stream',502)
                     self.send_response(upstream.status)
@@ -263,6 +362,7 @@ class MixedGateway(BaseHTTPRequestHandler):
                     MixedGateway.catalog_header(self)
                     self.send_header('Connection','close')
                     self.end_headers()
+                    streaming = True
                     event['kind'] = 'compaction'
                     event['compaction_model'] = json.loads(prepared.body)['model']
                     try:
@@ -287,21 +387,25 @@ class MixedGateway(BaseHTTPRequestHandler):
                     MixedGateway.catalog_header(self)
                     self.send_header('Connection', 'close')
                     self.end_headers()
+                    streaming = True
                     event['upstream_http_status'] = upstream.status
+                    completed = False
                     for frame, decoded in external_adapter.translated_events(upstream, prepared.tools):
-                        # Keep provider-specific internal reasoning out of
-                        # desktop history so ordinary native rollback works.
                         if decoded:
-                            if decoded.get('type','').startswith('response.reasoning') or decoded.get('item',{}).get('type') == 'reasoning': continue
-                            if isinstance(decoded.get('response'),dict) and isinstance(decoded['response'].get('output'),list):
-                                decoded['response']['output'] = [item for item in decoded['response']['output'] if item.get('type') != 'reasoning']
-                                frame = ('data: ' + json.dumps(decoded) + '\n\n').encode()
+                            decoded = desktop_external_event(decoded)
+                            if decoded is None: continue
+                            frame = ('data: ' + json.dumps(decoded) + '\n\n').encode()
+                            remember_external_handoffs(decoded)
                         self.wfile.write(frame)
                         self.wfile.flush()
-                        if decoded and decoded.get('type') == 'response.completed': event['response_completed'] = True
+                        if decoded and decoded.get('type') == 'response.completed':
+                            event['response_completed'] = completed = True
+                    if not completed:
+                        raise GatewayError('Provider stream ended without completing', 502)
                     event['upstream_eof'] = True
                     record(event)
                 else:
+                    streaming = True
                     self.relay(upstream, event)
         except urllib.error.HTTPError as error:
             safe_message = 'Selected provider rejected this request'
@@ -332,7 +436,7 @@ class MixedGateway(BaseHTTPRequestHandler):
                                 event['native_invalid_id_item_type'] = kind
                     except (ValueError,TypeError,AttributeError): pass
                 record(event)
-            if not streaming: self.fail(error.code if error.code in {400,401,402,403,404,422,429} else 502, safe_message, code=safe_code)
+            MixedGateway.request_failure(self, error.code if error.code in {400,401,402,403,404,408,422,429,504} else 502, safe_message, streaming, event, code=safe_code)
         except GatewayError as error:
             if event is None and error.status == 422:
                 try:
@@ -343,7 +447,15 @@ class MixedGateway(BaseHTTPRequestHandler):
                     event = {'kind':'request_rejected','model': selected if selected in set(self.core().external) | self.server.native_models else 'other','declared_tool_types':types}
                 except (ValueError,TypeError,KeyError): pass
             if event is not None: event['gateway_error'] = str(error); record(event)
-            if not streaming: self.fail(error.status, str(error))
-        except (OSError, ValueError, KeyError):
-            if not streaming: self.fail(502, 'Replica provider connection failed')
+            MixedGateway.request_failure(self, error.status, str(error), streaming, event)
+        except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
+            if event is not None:
+                event['connection_failure'] = 'timeout' if isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError) else 'transport' if isinstance(error, OSError) else 'invalid_response'
+                event['failure_type'] = type(getattr(error, 'reason', error)).__name__
+                event['elapsed_seconds'] = round(time.monotonic() - started, 2)
+                record(event)
+            external = event is not None and event.get('provider') != 'openai'
+            timed_out = external and (isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError))
+            message = 'Provider response timed out; no automatic retry was made' if timed_out else 'Replica provider connection failed'
+            MixedGateway.request_failure(self, 504 if timed_out else 502, message, streaming, event)
         finally: self.close_connection = True

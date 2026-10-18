@@ -22,12 +22,24 @@ def validate_service_tier(provider_id, provider, value):
         raise ValueError('Invalid service tier')
     if value:require_nanogpt(provider_id, provider)
 
+EXTERNAL_AUTO_COMPACT_TOKENS = 128000
+
+
 def public_catalog(catalog,providers=None):
     """Keep retired metadata for instruction mappings, never advertise it."""
+    external={mid for p in (providers or {}).values() for mid in p['models']}
     disabled={mid for p in (providers or {}).values() for mid,route in p['models'].items()
               if not p.get('enabled',True) or not route.get('enabled',True)}
-    return {**catalog, 'models':[{k:v for k,v in model.items() if not k.startswith('better_codex_')}
-        for model in catalog['models'] if not model.get('better_codex_removed') and model['slug'] not in disabled]}
+    models=[]
+    for model in catalog['models']:
+        if model.get('better_codex_removed') or model['slug'] in disabled:continue
+        entry={k:v for k,v in model.items() if not k.startswith('better_codex_')}
+        if model['slug'] in external:
+            # Use the native checkpoint flow before repeated history gets costly.
+            entry['auto_compact_token_limit']=min(EXTERNAL_AUTO_COMPACT_TOKENS,model['context_window']*80//100,
+                model.get('auto_compact_token_limit') or EXTERNAL_AUTO_COMPACT_TOKENS)
+        models.append(entry)
+    return {**catalog,'models':models}
 
 
 def load_registry(directory):

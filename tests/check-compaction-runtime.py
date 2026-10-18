@@ -16,12 +16,12 @@ root=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(root/'src/gateway'));sys.path.insert(0,str(root/'src/desktop'))
 import runtime_mixed as mixed
 import portable_compaction as portable
-from core import ToolNames
+from core import ToolNames, GatewayError
 from chat_bridge import response_events
 from api_settings import prepare_configuration
-from provider_registry import PROVIDERS
+from provider_registry import PROVIDERS, public_catalog
 
-selected=root/(root/'.local/deployment-path.txt').read_text().strip()
+selected=root/os.environ.get('BETTER_CODEX_TEST_DEPLOYMENT',(root/'.local/deployment-path.txt').read_text().strip())
 manifest=json.loads((selected/'Deployment.json').read_text())
 installed=Path(manifest['source_app'])
 for name,expected in manifest['installed_file_hashes'].items():
@@ -37,11 +37,11 @@ added={**next(r for r in rows if r['provider']=='openrouter'),'id':'@preset/runt
     'metadata_mode':'provider','reasoning_mode':'provider_default','efforts':['none'],'default_effort':'none'}
 _,catalog=prepare_configuration({'providers':{pid:{'endpoint':p['endpoint'],'default_model':p['default_model']} for pid,p in PROVIDERS.items()},
     'models':rows+[added]},PROVIDERS,catalog)
-(home/'models.json').write_text(json.dumps(catalog))
+(home/'models.json').write_text(json.dumps(public_catalog(catalog,PROVIDERS)))
 opaque='owned-native-checkpoint-runtime-fixture'
 summary='Owned fixture summary: earlier task requested a harmless terminal echo; previous lengthy assistant data was synthetic.'
 observed=[];failures=[];external_count=0;native_count=0;echo_received=False;gateway_events=[];runtime_errors=[]
-native_scenario=False;native_requests=[];native_long_reply=False;native_wire=[]
+native_scenario=False;native_requests=[];native_long_reply=False;native_wire=[];external_auto=False
 
 class Headers:
     def get_content_type(self):return 'text/event-stream'
@@ -61,7 +61,7 @@ def events(output,usage=None):
     values.append({'type':'response.completed','response':{'id':'resp_fixture','status':'completed','output':output,**({'usage':usage} if usage else {})}})
     return b''.join(('data: '+json.dumps(v)+'\n\n').encode() for v in values)
 
-def upstream(url,headers,body=None):
+def upstream(url,headers,body=None, *, timeout=120):
     global external_count,native_count,echo_received,native_long_reply
     try:
         payload=json.loads(body)
@@ -85,6 +85,7 @@ def upstream(url,headers,body=None):
                 native_long_reply=False
                 return Reply(events([{'type':'message','id':'msg_native_fixture','role':'assistant','content':[{'type':'output_text','text':content,'annotations':[]}]}],usage))
             if any(v.get('type')=='compaction_trigger' for v in payload['input']):
+                assert payload['reasoning']['effort']=='low', 'External reasoning effort leaked into the native checkpoint request'
                 return Reply(events([{'type':'compaction','id':'cmp_runtime_fixture','encrypted_content':opaque}]))
             assert payload['input'][0]['type']=='compaction' and payload['tools']==[] and payload['tool_choice']=='none'
             output=[{'type':'message','id':'msg_summary_runtime_fixture','role':'assistant','content':[{'type':'output_text','text':summary,'annotations':[]}]}]
@@ -94,23 +95,34 @@ def upstream(url,headers,body=None):
         names=ToolNames(payload.get('tools',[]))
         if external_count==0:
             content='Owned lengthy fixture data. '*4000
-            reply={'choices':[{'finish_reason':'stop','message':{'content':content}}]}
+            reply={'choices':[{'finish_reason':'stop','message':{'content':content}}],
+                'usage':{'prompt_tokens':130000 if external_auto else 70000,'completion_tokens':10,'total_tokens':130010 if external_auto else 70010}}
         elif external_count==1:
             assert summary in json.dumps(payload)
             tool=next(t for t in names.tools if t['name'].endswith('exec_command'))
             properties=tool['parameters']['properties']
             assert 'cmd' in properties
             arguments={'cmd':"Write-Output 'COMPACTION_NATIVE_TOOL_ECHO_OK'"}
+            if external_auto:
+                assert tool['parameters']['properties']['max_output_tokens'].get('default')==2000,tool['parameters']['properties']['max_output_tokens']
+                arguments['cmd'] = "Write-Output 'COMPACTION_NATIVE_TOOL_ECHO_OK " + 'fixture ' * 3000 + "'"
+                if 'shell' in properties:arguments['shell']=str(Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe')
             reply={'choices':[{'finish_reason':'tool_calls','message':{'tool_calls':[{'id':'owned_echo_call','type':'function','function':{'name':tool['name'],'arguments':json.dumps(arguments)}}]}}]}
         else:
             echo_received=any('COMPACTION_NATIVE_TOOL_ECHO_OK' in str(v.get('output','')) for v in payload['input'] if v.get('type')=='function_call_output')
             assert echo_received
+            if external_auto:
+                result=next(v['output'] for v in payload['input'] if v.get('type')=='function_call_output' and v.get('call_id')=='owned_echo_call')
+                assert len(str(result))<20000 and 'truncat' in str(result).lower(),{'output_bytes':len(str(result)), 'fixture_tail':str(result)[-200:]}
             reply={'choices':[{'finish_reason':'stop','message':{'content':'Owned fixture complete; native terminal echo received.'}}]}
+        if external_auto and external_count:
+            # Match the observed 41k baseline, then grow across later turns.
+            reply['usage']={'prompt_tokens':41000+4000*(external_count-1),'completion_tokens':10,'total_tokens':41010+4000*(external_count-1)}
         external_count+=1
         return Reply(b''.join(frame for frame,event in response_events(reply,names)))
     except Exception as error:
-        failures.append(type(error).__name__)
-        raise
+        failures.append({'type':type(error).__name__, 'detail':str(error)[:250] if isinstance(error,AssertionError) else ''})
+        raise GatewayError('Owned runtime fixture failed',422) from error
 
 old_open,old_record,old_cache,old_save=mixed.open_upstream,mixed.record,portable.CACHE,portable.save_summary
 mixed.open_upstream=upstream;mixed.record=lambda event:gateway_events.append({k:v for k,v in event.items() if k in {'gateway_error','kind','model'}});portable.CACHE=scratch/'context-cache'
@@ -157,6 +169,7 @@ try:
         'approvalPolicy':'never','sandbox':'read-only','baseInstructions':'Owned offline compaction fixture. Only a harmless terminal echo is permitted.'})['thread']['id']
     call('turn/start',{'threadId':thread,'input':[{'type':'text','text':'Owned synthetic conversation fixture.'}]})
     assert completed()=='completed',{'stage':'initial','gateway_events':gateway_events,'runtime_errors':runtime_errors,'failures':failures}
+    assert native_count==0,'External model compacted at the old 64k threshold'
     call('thread/compact/start',{'threadId':thread})
     assert completed()=='completed','Installed backend did not commit the genuine checkpoint fixture'
     call('turn/start',{'threadId':thread,'input':[{'type':'text','text':'Run the owned harmless terminal echo fixture.'}]})
@@ -165,6 +178,23 @@ try:
     external=[v for v in observed if not v['native']]
     assert external[-1]['portable_summary_received'] and not external[-1]['opaque_received']
     assert external[-1]['bytes'] < observed[1]['bytes']
+    # The advertised per-model threshold must trigger a genuine checkpoint
+    # without a manual compact command or a global/native config override.
+    external_auto=True;external_count=0
+    auto_external=call('thread/start',{'model':'zai/glm-5.3-flash','ephemeral':True,'cwd':str(scratch),
+        'approvalPolicy':'never','sandbox':'read-only','baseInstructions':'Owned external automatic compaction fixture.'})['thread']['id']
+    count=native_count
+    call('turn/start',{'threadId':auto_external,'input':[{'type':'text','text':'Produce the owned long external fixture.'}]})
+    assert completed()=='completed'
+    call('turn/start',{'threadId':auto_external,'input':[{'type':'text','text':'Run the owned harmless terminal echo fixture.'}]})
+    assert completed()=='completed',{'stage':'external auto','gateway_events':gateway_events,'runtime_errors':runtime_errors,'failures':failures}
+    assert native_count==count+2,'128k compaction did not trigger once or repeated after the checkpoint'
+    assert external_count==3 and echo_received and not failures
+    assert observed[-1]['portable_summary_received'] and observed[-1]['bytes']<observed[-4]['bytes']
+    for _ in range(3):
+        call('turn/start',{'threadId':auto_external,'input':[{'type':'text','text':'Continue the owned context fixture.'}]})
+        assert completed()=='completed'
+    assert native_count==count+2 and external_count==6,'Post-compaction baseline and bounded tool output caused repeated compaction'
     # Native compaction must relay the actual checkpoint without another model
     # request or a dependency on portable-summary generation/DPAPI storage.
     native_scenario=True
@@ -193,7 +223,7 @@ try:
     assert len(native_wire)>count,'Installed backend did not trigger native auto-compaction'
     assert not failures
     portable.save_summary=old_save
-    print('PASS: external compaction retained GLM/tool continuation; installed backend completed native manual and automatic compaction without portable-summary requests/cache access. Mocked inference only; no real account/app used.')
+    print('PASS: 128k automatic and manual checkpoints retain GLM context; verbose native output uses the 2000-token default; three later turns do not recompact. Native checkpoint paths remain independent. Mocked inference only; no real account/app used.')
 finally:
     process.terminate();process.wait(timeout=15);server.shutdown();server.server_close()
     mixed.open_upstream,mixed.record,portable.CACHE=old_open,old_record,old_cache

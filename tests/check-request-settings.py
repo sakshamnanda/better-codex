@@ -86,7 +86,7 @@ def fake_provider(prepared):
     return Stream(value['model'],wait=version=='old')
 relay.open_provider=fake_provider
 
-def open_outer(url,headers,body=None):
+def open_outer(url,headers,body=None, *, timeout=120):
     if url.startswith('https://chatgpt.com/'):
         assert dict((k.lower(),v) for k,v in headers)['authorization']=='Bearer owned-native-secret'
         return Stream('gpt-native-fixture',wait=True,native=True)
@@ -95,7 +95,7 @@ def open_outer(url,headers,body=None):
         before_relay.set();assert allow_relay.wait(10),'Fixture relay timed out'
     assert set(headers)=={'Authorization','Content-Type','Accept','X-Better-Codex-Generation'}
     assert headers['Authorization']=='Bearer '+mixed.DUMMY
-    return original_open(url,headers,body)
+    return original_open(url,headers,body,timeout=timeout)
 mixed.open_upstream=open_outer
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 url=f'http://127.0.0.1:{outer.server_port}/g/{outer.capability}/backend-api/codex/responses'

@@ -6,6 +6,7 @@ Only a scratch patch and a read-only MCP fixture are executed by Codex.
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -17,10 +18,10 @@ root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root / 'src/gateway'))
 sys.path.insert(0, str(root / 'src/desktop'))
 from core import GatewayCore, ToolNames
-from chat_bridge import response_events
+from chat_bridge import stream_response_events
 from runtime_mixed import prepare_routed_request
 
-selected = root / (root / '.local/deployment-path.txt').read_text().strip()
+selected = root / os.environ.get('BETTER_CODEX_TEST_DEPLOYMENT', (root / '.local/deployment-path.txt').read_text().strip())
 manifest = json.loads((selected / 'Deployment.json').read_text())
 installed = Path(manifest['source_app'])
 for name, expected in manifest['installed_file_hashes'].items():
@@ -45,6 +46,23 @@ for line in sys.stdin:
 ''', encoding='utf-8')
 observed, failures, results = [], [], []
 phase = 0
+
+def streamed_reply(reply, names):
+    choice = reply['choices'][0]
+    message = choice['message']
+    deltas = []
+    if message.get('content'):
+        text = message['content']
+        deltas.extend({'content': part} for part in (text[:len(text)//2], text[len(text)//2:]))
+    for index, call in enumerate(message.get('tool_calls', [])):
+        arguments = call['function']['arguments']
+        deltas.append({'tool_calls': [{'index': index, 'id': call['id'], 'type': 'function',
+            'function': {'name': call['function']['name'], 'arguments': arguments[:len(arguments)//2]}}]})
+        deltas.append({'tool_calls': [{'index': index, 'function': {'arguments': arguments[len(arguments)//2:]}}]})
+    chunks = [{'choices': [{'index': 0, 'delta': delta, 'finish_reason': None}]} for delta in deltas]
+    chunks.append({'choices': [{'index': 0, 'delta': {}, 'finish_reason': choice['finish_reason']}]})
+    wire = b''.join(('data: ' + json.dumps(chunk) + '\n\n').encode() for chunk in chunks) + b'data: [DONE]\n\n'
+    return stream_response_events(io.BytesIO(wire), names)
 
 class Backend(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -88,7 +106,9 @@ class Backend(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Connection', 'close')
             self.end_headers()
-            for frame, _ in response_events(reply, names): self.wfile.write(frame)
+            for frame, _ in streamed_reply(reply, names):
+                self.wfile.write(frame)
+                self.wfile.flush()
             self.wfile.flush()
         except Exception as error:
             failures.append(type(error).__name__ + ': ' + str(error))
@@ -126,6 +146,6 @@ try:
     (scratch / 'tool-result-metadata.json').write_text(json.dumps({'result_types': [type(r).__name__ for r in results], 'results': results}, indent=2), encoding='utf-8')
     assert any(name == 'status' or name.endswith('__status') for inventory in observed for ns, name in inventory), 'MCP fixture was not advertised'
     assert 'MCP_LOCAL_FIXTURE_OK' in json.dumps(results), 'MCP fixture was not executed; inspect ignored scratch tool-result-metadata.json locally'
-    print('PASS: installed Codex runtime exposes V2 agent contracts, handles translated native patch text with its own sandbox policy, and executes the owned MCP tool. No real provider, tunnel or subagent used.')
+    print('PASS: installed Codex consumes streamed Chat Completions text and fragmented native patch/MCP calls with its own sandbox policy. No real provider, tunnel or subagent used.')
 finally:
     server.shutdown(); server.server_close()

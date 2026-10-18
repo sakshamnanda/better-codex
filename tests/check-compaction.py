@@ -49,11 +49,21 @@ with contextlib.nullcontext(str(scratch)) as directory:
             {'type':'custom_tool_call','id':'fc_wrong_type_prefix','name':'fixture_custom','call_id':'fixture_custom_call','input':'fixture'},
             {'type':'custom_tool_call_output','id':'wrong_custom_result_id','call_id':'fixture_custom_call','output':'fixture completed'},
             {'type':'compaction_trigger'}]
-        payload={'model':'zai/glm-5.3-flash','input':history,'tools':[],'stream':True}
+        payload={'model':'zai/glm-5.3-flash','input':history,'tools':[],'stream':True,
+            'reasoning':{'effort':'none','summary':'auto'}}
         prepared,incoming,_=prepare_routed_request(core,core.prefix+'/backend-api/codex/responses',headers,json.dumps(payload).encode())
         native=json.loads(prepared.body)
         assert prepared.provider=='openai' and prepared.url=='https://chatgpt.com/backend-api/codex/responses'
         assert prepared.kind=='compaction' and native['model']=='gpt-6.1-sol'
+        assert native['reasoning']=={'effort':'low','summary':'auto'}
+        assert payload['reasoning']['effort']=='none'
+        for effort in (None,'none','high'):
+            request={**payload}
+            if effort is None: request.pop('reasoning')
+            else: request['reasoning']={'effort':effort,'summary':'auto'}
+            repaired,_,_=prepare_routed_request(core,core.prefix+'/backend-api/codex/responses',headers,json.dumps(request).encode())
+            assert json.loads(repaired.body)['reasoning']['effort']=='low'
+            assert request.get('reasoning',{}).get('effort')==effort
         assert incoming['model']==payload['model'] and payload['input'][2]['id']=='invalid_fixture_result_id'
         assert all('id' not in v for v in native['input'])
         assert native['input'][2]['call_id']=='fixture_call' and native['input'][3]['call_id']=='fixture_custom_call'
@@ -66,6 +76,7 @@ with contextlib.nullcontext(str(scratch)) as directory:
                 json.dumps({**payload,'model':model}).encode())
             assert native_prepared.kind=='responses' and native_prepared.provider=='openai'
             assert json.loads(native_prepared.body)['model']==native_incoming['model']==model
+            assert json.loads(native_prepared.body)['reasoning']==payload['reasoning']
             assert json.loads(native_prepared.body)['input'][-1]=={'type':'compaction_trigger'}
             assert not any(k.lower()=='accept-encoding' and v=='identity' for k,v in native_prepared.headers)
         calls=[]

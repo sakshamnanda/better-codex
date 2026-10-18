@@ -1,6 +1,7 @@
 """Offline privacy and HTTP-error handling checks; no inference or credentials."""
 from pathlib import Path
 import io
+import http.client
 import json
 import sys
 import urllib.error
@@ -75,7 +76,8 @@ class OuterRequest:
     def fail(self,status,message,code='replica_gateway_error'):
         self.observed=(status,message,code)
 
-def outer_rejected(*args):
+def outer_rejected(*args, **kwargs):
+    assert kwargs['timeout'] > relay.PROVIDER_TIMEOUT
     raise urllib.error.HTTPError('http://fixture.invalid/responses',400,'fixture',{},io.BytesIO(response))
 old_open, old_record=mixed.open_upstream,mixed.record
 try:
@@ -84,4 +86,165 @@ try:
     assert outer.observed == (400,fake.observed[1],'context_length_exceeded'), outer.observed
 finally:
     mixed.open_upstream,mixed.record=old_open,old_record
+
+# The outer hop must leave time for the inner timeout's sanitized response.
+for failure, status, category in ((TimeoutError(private), 504, 'timeout'),
+        (urllib.error.URLError(TimeoutError(private)), 504, 'timeout'),
+        (urllib.error.URLError(private), 502, 'transport'),
+        (http.client.IncompleteRead(private.encode(), 100), 502, 'http_protocol'),
+        (http.client.RemoteDisconnected(private), 502, 'http_protocol'),
+        (ConnectionResetError(private), 502, 'transport')):
+    def failed_provider(*args): raise failure
+    events = []
+    try:
+        relay.key_supplier = lambda provider: 'dummy-provider-fixture'
+        relay.open_provider = failed_provider
+        relay.record = events.append
+        relay.save_diagnostics = lambda: None
+        fake = FakeRequest(); fake.rfile = io.BytesIO(fake.payload)
+        relay.RealGateway.do_POST(fake)
+        assert fake.observed[0] == status and events[0]['connection_failure'] == category
+        assert events[0]['elapsed_seconds'] >= 0
+        assert events[0]['provider_stage'] == 'response_headers'
+        response = json.dumps({'error': {'code': fake.observed[3], 'message': fake.observed[1]}}).encode()
+        assert relay.public_relay_detail(response) == (fake.observed[3], fake.observed[1])
+        assert private not in json.dumps(events) and private not in response.decode()
+        def outer_timeout(*args, **kwargs):
+            assert kwargs['timeout'] > relay.PROVIDER_TIMEOUT == 120
+            raise urllib.error.HTTPError('http://fixture.invalid', status, 'fixture', {}, io.BytesIO(response))
+        mixed.open_upstream = outer_timeout; mixed.record = lambda event: None
+        outer = OuterRequest(); outer.rfile = io.BytesIO(FakeRequest.payload)
+        mixed.MixedGateway.do_POST(outer)
+        assert outer.observed == (400, fake.observed[1], fake.observed[3])
+    finally:
+        relay.key_supplier, relay.open_provider, relay.record, relay.save_diagnostics = original_key, original_open, original_record, original_save
+        mixed.open_upstream, mixed.record = old_open, old_record
+
+# A truncated Chat Completions stream must emit a bounded relay error.
+class TruncatedReply:
+    headers = type('Headers', (), {'get_content_type': lambda self: 'text/event-stream'})()
+    def __enter__(self): return self
+    def __exit__(self, *args): return False
+    def readline(self, limit): raise http.client.IncompleteRead(private.encode(), 100)
+try:
+    relay.key_supplier = lambda provider: 'dummy-provider-fixture'
+    relay.open_provider = lambda *args: TruncatedReply()
+    events = []; relay.record = events.append; relay.save_diagnostics = lambda: None
+    fake = FakeRequest()
+    fake.wfile = io.BytesIO()
+    fake.send_response = lambda *args: None
+    fake.send_header = lambda *args: None
+    fake.end_headers = lambda: None
+    fake.payload = json.dumps({'model': 'z-ai/glm-5.3-flash-uncensored', 'input': [{'role':'user', 'content':'fixture'}], 'tools': []}).encode()
+    fake.headers = {**fake.headers, 'Content-Length': str(len(fake.payload))}
+    fake.rfile = io.BytesIO(fake.payload)
+    fake.server = type('Server', (), {'prefix':'/fixture', 'server_port':12345,
+        'catalog':{'models':[{'slug':'z-ai/glm-5.3-flash-uncensored'}]}})()
+    relay.RealGateway.do_POST(fake)
+    assert fake.observed[0] == 502 and fake.observed[2] is True
+    assert events[0]['provider_stage'] == 'response_stream'
+    assert events[0]['connection_failure'] == 'http_protocol'
+    assert events[0]['failure_type'] == 'IncompleteRead'
+    assert private not in json.dumps(events) and private not in fake.observed[1]
+finally:
+    relay.key_supplier, relay.open_provider, relay.record, relay.save_diagnostics = original_key, original_open, original_record, original_save
+
+# Verify the actual socket budgets without opening a connection.
+from types import SimpleNamespace
+original_builder = relay.urllib.request.build_opener
+budgets = []
+class OfflineOpener:
+    def open(self, request, timeout):
+        budgets.append(timeout)
+        return None
+try:
+    relay.urllib.request.build_opener = lambda *args: OfflineOpener()
+    relay.open_provider(SimpleNamespace(url='https://provider.invalid/chat/completions', body=b'{}', headers={}))
+    mixed.open_upstream('https://chatgpt.com/backend-api/codex/responses', {}, b'{}')
+    mixed.open_upstream('http://127.0.0.1:12345/fixture', {}, b'{}', timeout=relay.PROVIDER_TIMEOUT + 30)
+    assert budgets == [120, 120, 150], budgets
+finally:
+    relay.urllib.request.build_opener = original_builder
+
+# Once SSE headers are sent, errors must reach the desktop as terminal events.
+# Exercise the actual outer handler, preserving safe timeout text across hops.
+safe_timeout = 'Provider response timed out; no automatic retry was made'
+class StreamReply(io.BytesIO):
+    status = 200
+    headers = type('Headers', (), {'get_content_type': lambda self: 'text/event-stream'})()
+
+class StreamingRequest(OuterRequest):
+    def __init__(self):
+        mixed.FAILED_EXTERNAL_STREAMS.clear()
+        self.rfile = io.BytesIO(FakeRequest.payload)
+        self.wfile = io.BytesIO()
+        self.statuses = []
+    def send_response(self, status): self.statuses.append(status)
+    def send_header(self, *args): pass
+    def end_headers(self): pass
+
+created = 'data: ' + json.dumps({'type': 'response.created', 'response': {'output': []}}) + '\n\n'
+failed = 'data: ' + json.dumps({'type': 'error', 'code': 'provider_test_error', 'message': safe_timeout}) + '\n\n'
+for tail in (failed, '', 'data: broken-json\n\n', 'data: {'):
+    attempts = []
+    try:
+        def stream_reply(*args, **kwargs):
+            attempts.append(True)
+            return StreamReply((created + tail).encode())
+        mixed.open_upstream = stream_reply
+        mixed.record = lambda event: None
+        outer = StreamingRequest()
+        mixed.MixedGateway.do_POST(outer)
+        frames = [json.loads(line[6:]) for line in outer.wfile.getvalue().decode().splitlines() if line.startswith('data: ')]
+        assert outer.statuses == [200] and len(attempts) == 1
+        assert frames[-1]['type'] == 'error', frames
+        assert not any(frame['type'] == 'response.completed' for frame in frames)
+        if tail == failed: assert frames[-1]['message'] == safe_timeout
+        assert private not in outer.wfile.getvalue().decode()
+    finally:
+        mixed.open_upstream, mixed.record = old_open, old_record
+
+# Content-type validation happens before headers, so it cannot silently close.
+try:
+    reply = StreamReply(b'')
+    reply.headers = type('Headers', (), {'get_content_type': lambda self: 'text/html'})()
+    mixed.open_upstream = lambda *args, **kwargs: reply
+    mixed.record = lambda event: None
+    outer = StreamingRequest()
+    mixed.MixedGateway.do_POST(outer)
+    assert outer.observed[0] == 400 and outer.statuses == []
+finally:
+    mixed.open_upstream, mixed.record = old_open, old_record
+
+# Socket timeout after headers must emit a safe failure, retaining partial text.
+class TimedOutStream(StreamReply):
+    def readline(self, limit):
+        line = super().readline(limit)
+        if not line: raise TimeoutError(private)
+        return line
+try:
+    partial = 'data: ' + json.dumps({'type': 'response.output_text.delta', 'delta': 'Partial answer'}) + '\n\n'
+    mixed.open_upstream = lambda *args, **kwargs: TimedOutStream((created + partial).encode())
+    mixed.record = lambda event: None
+    outer = StreamingRequest()
+    mixed.MixedGateway.do_POST(outer)
+    visible = outer.wfile.getvalue().decode()
+    assert 'Partial answer' in visible and safe_timeout in visible and private not in visible
+finally:
+    mixed.open_upstream, mixed.record = old_open, old_record
+
+# Completed responses and native HTTP behavior retain their original semantics.
+try:
+    done = 'data: ' + json.dumps({'type': 'response.completed', 'response': {'output': []}}) + '\n\n'
+    mixed.open_upstream = lambda *args, **kwargs: StreamReply((created + done).encode())
+    mixed.record = lambda event: None
+    outer = StreamingRequest()
+    mixed.MixedGateway.do_POST(outer)
+    frames = [json.loads(line[6:]) for line in outer.wfile.getvalue().decode().splitlines() if line.startswith('data: ')]
+    assert frames[-1]['type'] == 'response.completed' and not any(frame['type'] == 'error' for frame in frames)
+    outer = OuterRequest()
+    mixed.MixedGateway.request_failure(outer, 502, 'Native fixture error', False, {'provider': 'openai'})
+    assert outer.observed == (502, 'Native fixture error', 'replica_gateway_error')
+finally:
+    mixed.open_upstream, mixed.record = old_open, old_record
 print('PASS: bounded diagnostics exclude private values; both relays preserve the context error code and safe recovery message.')
