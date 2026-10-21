@@ -18,7 +18,7 @@ Windows Codex desktop custom providers, using the original installed signed app 
 - For external models, `/compact` creates a genuine ChatGPT checkpoint and one tool-free portable summary using your ChatGPT sign-in, while retaining the selected external model. The checkpoint uses low reasoning independently of the external model's setting, including **Provider default**. The summary is Windows-encrypted locally; external continuation receives text rather than opaque native state. Native ChatGPT manual and automatic compaction use the ordinary native stream without requiring a portable summary. The saved transcript and native rollback checkpoint remain intact.
 - External models automatically trigger this same compaction flow at their configured threshold, capped at 80% of their context capacity. Without a configured threshold, they use 80% of context capacity. This reduces repeated history without changing the advertised context capacity or native ChatGPT thresholds. It is a compaction trigger, not a hard request-size cap: a large input or tool result can exceed it. Compaction needs your ChatGPT sign-in and adds checkpoint/summary requests; summaries can omit details, so file evidence may need to be read again. The updated helper and a model refresh or next launch are needed to advertise the threshold.
 
-This is a tested local customization, not an official provider-picker extension. Updates require a compatibility review; source/hash guards refuse unknown builds.
+This is a tested local customization, not an official provider-picker extension. Updates require a compatibility review; source/hash guards refuse unknown builds. Deployment builds also link the original and custom renderer/settings module graphs in V8 without executing app code, rejecting missing exports before selection.
 
 NanoGPT streams Chat Completions text as it arrives. Tool-call fragments are assembled and validated before execution; reasoning stays private and remains available for tool continuation. Provider usage can include reasoning or tool calls without a visible answer. External HTTP providers retry 429 rejections up to three times before streaming starts. They honor `Retry-After` seconds or HTTP dates; otherwise they wait roughly 2, 4 and 8 seconds with jitter. Retries share the existing 120-second header timeout and allow at most 30 seconds of combined waiting; a longer requested wait stops the request without retrying early. Local diagnostics record attempts, 429 responses and retry waits. External timeouts, transport failures and exhausted 429s return an explicit error; the desktop-facing gateway uses a non-retryable HTTP response before streaming starts to avoid repeating billable requests. Failures after streaming starts emit an error event instead of silently dropping the connection. A bounded, process-local fingerprint guard blocks one identical retry within 30 seconds after a stream fails, preventing the desktop from repeating inference automatically. The provider's original status remains in local diagnostics.
 
@@ -97,9 +97,18 @@ python tests/check-catalog-runtime.py
 python tests/check-rollback.py
 python tests/check-provider-registry.py
 python tests/check-arnict.py
+python tests/check-routeway.py
+python tests/check-layercloud.py
+python tests/check-experiential.py
+python tests/check-vision.py
+python tests/check-native-exports.py
+node --experimental-vm-modules tests/check-overlay-link.cjs
 python tests/check-model-profiles.py
 python tests/check-opencode-relay.py
 python tests/check-delegation-tools.py
+python tests/check-subagent-cleanup.py
+python tests/check-subagent-models.py
+python tests/check-delegation-runtime.py --child-model glm-5.3-flash-abliterated
 python tests/check-delegation-handoffs.py
 python tests/check-delegation-runtime.py
 python tests/check-tool-compatibility.py
@@ -112,6 +121,7 @@ python tests/check-compaction-runtime.py
 python tests/check-native-client-tools.py
 node tests/check-picker.cjs
 node tests/check-settings-layout.cjs
+node tests/check-subagent-renderer.cjs
 python scripts/build-deployment.py --check
 ```
 

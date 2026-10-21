@@ -172,6 +172,12 @@ overlay['overlay_source_sha256'] = hashlib.sha256(updated.encode()).hexdigest()
 overlay['additional_assets'] = [{'filename':settings_name,'original_source_sha256':settings_hash,
     'source_file':'Better-Codex-Settings.source.js','overlay_source_sha256':hashlib.sha256(settings_source.encode()).hexdigest()}]
 (DEPLOY / 'Provider-Overlay.json').write_text(json.dumps(overlay,indent=2))
+link_environment = {**os.environ, 'BETTER_CODEX_TEST_DEPLOYMENT': str(DEPLOY)}
+linked = subprocess.run(['node', '--experimental-vm-modules', str(ROOT / 'tests/check-overlay-link.cjs')],
+                        env=link_environment, capture_output=True, text=True, timeout=45,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+if linked.returncode:
+    raise RuntimeError('Renderer module linking failed; deployment was not selected. ' + linked.stderr.strip())
 checks = {}
 vendor=DEPLOY/'support/opencode-runtime/config/opencode/node_modules'
 if not vendor.is_dir():raise RuntimeError('Verified engine dependencies must be staged for a runtime build')
