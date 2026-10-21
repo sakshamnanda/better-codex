@@ -33,6 +33,8 @@ metadata={m['slug']:m for m in catalog['models']}
 rows=[{'id':mid,'provider':pid,'label':metadata[mid]['display_name'],'context':metadata[mid]['context_window'],
     'output':route.get('output_limit',4096),'efforts':[e['effort'] for e in metadata[mid]['supported_reasoning_levels']],
     'default_effort':metadata[mid]['default_reasoning_level']} for pid,p in PROVIDERS.items() for mid,route in p['models'].items()]
+# Keep the synthetic 130k usage above an explicit per-model trigger.
+next(row for row in rows if row['id']=='zai/glm-5.3-flash')['auto_compact_token_limit']=128000
 added={**next(r for r in rows if r['provider']=='openrouter'),'id':'@preset/runtime-fixture','label':'Owned preset fixture',
     'metadata_mode':'provider','reasoning_mode':'provider_default','efforts':['none'],'default_effort':'none'}
 _,catalog=prepare_configuration({'providers':{pid:{'endpoint':p['endpoint'],'default_model':p['default_model']} for pid,p in PROVIDERS.items()},
@@ -223,7 +225,7 @@ try:
     assert len(native_wire)>count,'Installed backend did not trigger native auto-compaction'
     assert not failures
     portable.save_summary=old_save
-    print('PASS: 128k automatic and manual checkpoints retain GLM context; verbose native output uses the 2000-token default; three later turns do not recompact. Native checkpoint paths remain independent. Mocked inference only; no real account/app used.')
+    print('PASS: configured 128k automatic and manual checkpoints retain GLM context; verbose native output uses the 2000-token default; three later turns do not recompact. Native checkpoint paths remain independent. Mocked inference only; no real account/app used.')
 finally:
     process.terminate();process.wait(timeout=15);server.shutdown();server.server_close()
     mixed.open_upstream,mixed.record,portable.CACHE=old_open,old_record,old_cache

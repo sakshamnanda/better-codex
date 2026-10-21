@@ -76,6 +76,7 @@
     return {action:`save`,revision:snapshot.revision,
       providers:Object.fromEntries(Object.entries(draft.providers).map(([id,p])=>[id,{label:p.label,adapter:p.adapter,endpoint:p.endpoint,default_model:p.default_model,enabled:p.enabled!==false}])),
       models:draft.models.map(m=>({id:m.id,provider:m.provider,label:m.label,context:Number(m.context),output:Number(m.output),enabled:m.enabled!==false,
+        auto_compact_token_limit:m.auto_compact_token_limit==null||m.auto_compact_token_limit===``?null:Number(m.auto_compact_token_limit),
         efforts:m.efforts,default_effort:m.default_effort,metadata_mode:m.metadata_mode??`custom`,reasoning_mode:m.reasoning_mode??`explicit`,
         ...(m.provider===`nanogpt`?{upstream_provider:m.upstream_provider??``,service_tier:m.service_tier??``}:{})})),
       keys:Object.fromEntries(Object.entries(draft.keys).map(([id,p])=>[id,{active:p.active,profiles:p.profiles.map(k=>({id:k.id,label:k.label.trim(),key:k.key}))}]))};
@@ -97,7 +98,7 @@
   }
   function completeDraft(draft) {
     return Object.values(draft.providers).every(p=>p.label.trim()&&p.endpoint.startsWith(`https://`))&&
-      draft.models.every(m=>m.id.trim()&&m.label.trim()&&Number(m.context)>=2&&Number(m.output)>=1&&Number(m.output)<=Number(m.context)&&m.efforts.length&&m.efforts.includes(m.default_effort))&&
+      draft.models.every(m=>m.id.trim()&&m.label.trim()&&Number(m.context)>=2&&Number(m.output)>=1&&Number(m.output)<=Number(m.context)&&(m.auto_compact_token_limit==null||m.auto_compact_token_limit===``||(Number.isInteger(Number(m.auto_compact_token_limit))&&Number(m.auto_compact_token_limit)>=1&&Number(m.auto_compact_token_limit)<=4194304))&&m.efforts.length&&m.efforts.includes(m.default_effort))&&
       Object.values(draft.keys).every(entry=>entry.profiles.every(p=>p.label.trim()&&(p.existing||p.id===`default`||p.key.trim()))&&
         (!entry.profiles.length||entry.profiles.some(p=>p.id===entry.active&&(p.saved||p.key.trim()))||!entry.profiles.some(p=>p.saved||p.key.trim())));
   }
@@ -399,6 +400,8 @@
               automatic?e(SettingsRow,{label:`Provider metadata`,description:model.metadataNotes||`Fetched when adding a model. Use Refresh metadata to update saved limits.`,
                 control:button(`Refresh metadata`,()=>fetchMetadata(index),busy||!model.id.trim())}):null,
               e(Field,{label:`Context tokens`,type:`number`,value:model.context,readOnly:automatic,placeholder:`Not reported`,min:2,max:4194304,disabled:busy,onChange:value=>change(`context`,value)}),
+              e(Field,{label:`Auto-compact tokens`,type:`number`,value:model.auto_compact_token_limit,placeholder:`Model default (80% if unset)`,min:1,max:4194304,disabled:busy,onChange:value=>change(`auto_compact_token_limit`,value)}),
+              e(SettingsRow,{label:`Compaction threshold`,description:`Leave blank for the default. Custom thresholds are capped at 80% of the context window. Use Refresh models after saving to apply the threshold.`}),
               e(Field,{label:`Maximum output tokens`,type:`number`,value:model.output,readOnly:automatic,placeholder:`Not reported`,min:1,max:1048576,disabled:busy,onChange:value=>change(`output`,value)}),
               !automatic?menuRow(`Reasoning control`,[{value:`provider_default`,label:`Provider default`},{value:`explicit`,label:`Choose supported efforts`}],model.reasoning_mode??`explicit`,value=>edit(next=>{
                 const row=next.models[index];row.reasoning_mode=value;

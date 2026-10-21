@@ -71,6 +71,21 @@ for field,value in (('adapter','unverified'),('endpoint','https://chatgpt.com/re
         try:load_registry(folder);raise AssertionError('Unverified provider accepted')
         except ValueError:pass
 
+custom=copy.deepcopy(request)
+custom['models'][0]['auto_compact_token_limit']=240000
+custom_p,custom_c=prepare_configuration(custom,providers,catalog)
+custom_id=custom['models'][0]['id']
+assert next(m for m in custom_c['models'] if m['slug']==custom_id)['better_codex_auto_compact_token_limit']==240000
+for value in (0,-1,True,1.5,'100',4194305):
+    custom['models'][0]['auto_compact_token_limit']=value
+    try:prepare_configuration(custom,providers,catalog);raise AssertionError('Invalid compaction threshold accepted')
+    except ValueError:pass
+custom['models'][0]['auto_compact_token_limit']=None
+_,cleared=prepare_configuration(custom,custom_p,custom_c)
+assert 'better_codex_auto_compact_token_limit' not in next(m for m in cleared['models'] if m['slug']==custom_id)
+print('PASS: compaction threshold persistence, reset and validation.')
+
+
 with tempfile.TemporaryDirectory(dir=root / '.local',prefix='settings-check-') as directory:
     project = Path(directory)
     config = project / 'config'; config.mkdir()

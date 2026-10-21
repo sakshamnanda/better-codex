@@ -18,7 +18,7 @@ providers['fixture']['models']['disabled']={'enabled':False}
 original=copy.deepcopy(catalog)
 models={m['slug']:m for m in public_catalog(catalog,providers)['models']}
 assert models['native']==catalog['models'][0]
-assert models['large']['auto_compact_token_limit']==128000
+assert models['large']['auto_compact_token_limit']==800000
 assert models['large']['context_window']==1000000
 assert models['small']['auto_compact_token_limit']==25600
 assert models['lower']['auto_compact_token_limit']==16000
@@ -26,3 +26,13 @@ assert 'disabled' not in models and 'retired' not in models
 assert catalog==original
 assert public_catalog({'models':[catalog['models'][0]]})['models']==[catalog['models'][0]]
 print('PASS: external budgets, smaller contexts, lower thresholds, disabled/retired filtering and unchanged native/source metadata.')
+
+custom=copy.deepcopy(catalog)
+custom['models'][1]['better_codex_auto_compact_token_limit']=400000
+custom['models'][2]['better_codex_auto_compact_token_limit']=30000
+advertised={m['slug']:m for m in public_catalog(custom,providers)['models']}
+assert advertised['large']['auto_compact_token_limit']==400000
+assert advertised['small']['auto_compact_token_limit']==25600
+assert 'better_codex_auto_compact_token_limit' not in advertised['large']
+assert catalog==original
+print('PASS: per-model overrides, context safety cap and private metadata filtering.')

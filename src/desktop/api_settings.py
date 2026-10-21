@@ -116,7 +116,7 @@ def prepare_configuration(request, providers, catalog):
     seen = set()
     for row in rows:
         fields={'id', 'provider', 'label', 'context', 'output', 'efforts', 'default_effort'}
-        if not isinstance(row, dict) or not fields <= set(row) or set(row)-fields-{'metadata_mode','reasoning_mode','enabled','upstream_provider','service_tier'}:
+        if not isinstance(row, dict) or not fields <= set(row) or set(row)-fields-{'metadata_mode','reasoning_mode','enabled','upstream_provider','service_tier','auto_compact_token_limit'}:
             raise ValueError('Unexpected model options.')
         if type(row.get('enabled',True)) is not bool:raise ValueError('Model enabled must be a boolean.')
         mid, pid = row['id'], row['provider']
@@ -132,6 +132,9 @@ def prepare_configuration(request, providers, catalog):
             raise ValueError('Model labels must contain 1 to 160 characters.')
         if type(row['context']) is not int or not 2 <= row['context'] <= 4_194_304 or type(row['output']) is not int or not 1 <= row['output'] <= row['context'] or row['output'] > 1_048_576 or (mode=='custom' and row['output']==row['context']):
             raise ValueError('Supply valid limits; use Customize if the provider does not report them.')
+        compact=row.get('auto_compact_token_limit')
+        if compact is not None and (type(compact) is not int or not 1 <= compact <= 4_194_304):
+            raise ValueError('Auto-compact tokens must be a positive whole number or blank.')
         efforts = row['efforts']
         if not isinstance(efforts, list) or not efforts or any(e not in EFFORTS for e in efforts) or len(set(efforts)) != len(efforts) or row['default_effort'] not in efforts:
             raise ValueError('Choose supported efforts and a default from that list.')
@@ -152,6 +155,10 @@ def prepare_configuration(request, providers, catalog):
                 'persistent_instructions':''}
             catalog['models'].append(model)
             metadata[mid] = model
+        if 'auto_compact_token_limit' in row:
+            if compact is None:model.pop('better_codex_auto_compact_token_limit',None)
+            else:model['better_codex_auto_compact_token_limit']=compact
+        elif mid not in owners:model.pop('better_codex_auto_compact_token_limit',None)
         model.update(better_codex_provider=pid,better_codex_removed=False)
         providers[pid]['models'][mid]=copy.deepcopy(old_routes.get(mid,{}))
         providers[pid]['models'][mid]['output_limit'] = row['output']
@@ -225,6 +232,7 @@ class Settings:
                 'default_model':p['default_model'],'saved_key':any(profile['id']==profiles[pid]['active'] and profile['saved'] for profile in profiles[pid]['profiles']),
                 'credential_profiles':profiles[pid]} for pid,p in providers.items()},
             'models':[{'id':mid,'provider':pid,'label':metadata[mid]['display_name'],
+                'auto_compact_token_limit':metadata[mid].get('better_codex_auto_compact_token_limit'),
                 'context':metadata[mid]['context_window'],'output':route.get('output_limit',4096),'enabled':route.get('enabled',True),
                 'efforts':[e['effort'] for e in metadata[mid]['supported_reasoning_levels']],
                 'default_effort':metadata[mid]['default_reasoning_level'],
