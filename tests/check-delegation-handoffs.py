@@ -58,6 +58,18 @@ for name in ('spawn_agent','followup_task','send_message','send_input'):
     mixed.PLAINTEXT_HANDOFFS.clear()
     mixed.remember_external_handoffs({'type':'response.completed', 'response':{'output':[{**call,'name':name}]}})
     assert mixed.normalize_agent_handoffs([handoff])[0] == normalized
+mixed.PLAINTEXT_HANDOFFS.clear()
+saved_call = {**call, 'call_id':'owned-saved-call'}
+saved = {'model':'@preset/glm-flash-latest', 'input':[saved_call,
+    {'type':'function_call_output', 'call_id':'owned-saved-call', 'output':'Owned worker created.'}],
+    'tools':[], 'instructions':'ORIGINAL_PERMISSIONS'}
+mixed.prepare_routed_request(core, core.prefix+'/backend-api/codex/responses', headers, json.dumps(saved).encode())
+assert mixed.normalize_agent_handoffs([handoff])[0] == normalized, 'Saved parent task provenance was lost after restart'
+assert mixed.normalize_agent_handoffs([opaque]) == [opaque], 'Saved history changed unrelated opaque content'
+mixed.PLAINTEXT_HANDOFFS.clear()
+saved['model'] = 'gpt-6.1-sol'
+mixed.prepare_routed_request(core, core.prefix+'/backend-api/codex/responses', headers, json.dumps(saved).encode())
+assert not mixed.PLAINTEXT_HANDOFFS, 'Native history was treated as external provenance'
 for index in range(1025):
     mixed.remember_external_handoffs({'type':'response.output_item.done', 'item':{**call,'arguments':json.dumps({'message':str(index)})}})
 assert len(mixed.PLAINTEXT_HANDOFFS) == 1024

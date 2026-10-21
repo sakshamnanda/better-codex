@@ -1,6 +1,7 @@
 """Reviewed static integration for exact signed desktop builds; never probe live UI."""
 import hashlib
 import json
+import re
 
 
 UPDATED_PACKAGE = 'OpenAI.Codex_26.1013.4894.0_x64__2p2nqsd0c76g0'
@@ -42,6 +43,15 @@ def replace_once(source, before, after):
     return source.replace(before, after, 1)
 
 
+def require_named_imports(source, assets):
+    for names, filename in re.findall(r'import\s*\{([^}]+)\}\s*from\s*["\']\./([^"\']+)', source):
+        # Pinned bundles contain embedded source text with obsolete export tables.
+        exports = re.search(r'\bexport\{([^{}]*)\};\s*(?://# sourceMappingURL=[^\r\n]*)?\s*\Z', assets[filename])
+        available = {entry.split(' as ')[-1] for entry in exports[1].split(',')} if exports else set()
+        if any(entry.strip().split(' as ')[0] not in available for entry in names.split(',')):
+            raise RuntimeError('Reviewed native module export changed; customization refused')
+
+
 def build_updated_overlay(root, manifest, overlay, read_asset, picker):
     """Only source reviewed for 26.1013.4894, with native callbacks left in place."""
     from pathlib import Path
@@ -64,10 +74,20 @@ def build_updated_overlay(root, manifest, overlay, read_asset, picker):
     helper = helper.replace('CU.', 'YU.').replace('mh.', 'Fi.')
     helper = replace_once(helper, '? wn : undefined', '? Wu : undefined')
     helper += '\n' + (root / 'src/ui/chat-default-model.js').read_text(encoding='utf-8')
+    helper += '\n' + (root / 'src/ui/restart-recovery.js').read_text(encoding='utf-8')
+    # The RPC client returned by nS cannot supply synchronous state/listeners.
+    # G6n exports QO in the executable module, outside its embedded source text.
+    helper = 'import {G6n as gatewayNativeManagerAtom} from "./app-initial-5851df3f6cb1.js";\n' + helper
+    require_named_imports(helper, assets)
     helper = 'const gatewayProviderConfig = ' + json.dumps(picker).replace('<', '\\u003c') + ';\n' + bridge + '\n' + helper
     updated = replace_once(source, 'function e8e(e){', helper + '\nfunction e8e(e){e=gatewayPickerMenuProps(e);')
     updated = replace_once(updated, 'let nt=T&&tt===',
-        'gatewayChatDefaultModel(ZW,n,(w||T)&&Qe&&!We,()=>{sA(D,`default`,T);g({slug:f.defaultModelSlug,thinkingEffort:f.defaultThinkingEffortByModelSlug?.[f.defaultModelSlug]??null,versionId:Nd(f,f.defaultModelSlug)})});let nt=T&&tt===')
+        'globalThis.gatewaySubagentRequest=(method,params)=>{if(![`thread/list`,`thread/archive`,`thread/delete`].includes(method))throw Error(`Unsupported cleanup operation`);return nS(D,`local`).sendRequest(method,params)};gatewayChatDefaultModel(ZW,n,(w||T)&&Qe&&!We,()=>{sA(D,`default`,T);g({slug:f.defaultModelSlug,thinkingEffort:f.defaultThinkingEffortByModelSlug?.[f.defaultModelSlug]??null,versionId:Nd(f,f.defaultModelSlug)})});let nt=T&&tt===')
+    updated = replace_once(updated, ';gatewayChatDefaultModel(ZW,n,',
+        ';gatewayWatchRestartRecovery(D,message=>D.get(cc).danger(message,{errorAnalytics:{toastId:`betterCodex.restartRecovery`}}));gatewayChatDefaultModel(ZW,n,')
+
+    updated = replace_once(updated, 'function cn(e){return q&&e===Pe?zv:e}',
+        '(0,pG.useEffect)(()=>{if(T===`local`)gatewayWatchRestartRecovery(l,message=>l.get(cc).danger(message,{errorAnalytics:{toastId:`betterCodex.restartRecovery`}}))},[l,T]);gatewayChatDefaultModel(pG,i,!yt&&!q&&he?.isModelLocked!==!0&&jt!=null,()=>{l.set(MS,`default`);return sn(jt.model,jt.defaultReasoningEffort,{persistAsDefault:!1})},JSON.stringify([T,S.cwd]));function cn(e){return q&&e===Pe?zv:e}')
 
     settings_name = 'settings-page-3320f8f55cf7.js'
     settings = assets[settings_name]
@@ -92,6 +112,7 @@ import {s as gatewayInitializeSettingsControls} from "./general-settings-a68a0de
     # alias to its own lexical block, leaving every native binding unchanged.
     editor = (root / 'src/ui/api-settings.js').read_text(encoding='utf-8')
     settings = imports + replace_once(settings, 'Ti();export{_i as SettingsPage};', 'Ti();gatewayInitializeSettingsControls();gatewayInitializeDirtySettings();gatewayInitializeSearch();gatewayInitializeSettingsSection();\n{const li=wi;\n' + editor + '\n}\nexport{_i as SettingsPage};')
+    require_named_imports(imports, assets)
     overlay['filename'] = 'app-primary-fe8a450b3b04.js'
     overlay['original_source_sha256'] = UPDATED_ASSETS[overlay['filename']]
     return updated, settings, settings_name, UPDATED_ASSETS[settings_name]

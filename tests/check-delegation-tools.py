@@ -24,6 +24,13 @@ guide = outer.delegation_guidance()
 assert 'multi_agent_v1__spawn_agent' in guide and 'does not create or reopen' in guide
 assert 'do not message that ID again' in guide and 'display nickname' in guide
 assert inner.delegation_guidance() == ''  # The outer gateway has already supplied it.
+restart = ToolNames([{'type': 'namespace', 'name': 'collaboration', 'tools': [
+    {'type': 'function', 'name': name, 'parameters': {'type': 'object', 'properties': {
+        'target': {'type': 'string'}, 'message': {'type': 'string'}}, 'required': ['target', 'message']}}
+    for name in ('send_message', 'followup_task')]}])
+assert 'does not start a turn' in restart.delegation_guidance()
+assert 'including after its final answer' in restart.delegation_guidance()
+assert [tool['parameters']['required'] for tool in restart.tools] == [['target', 'message']] * 2
 assert ToolNames([{'type':'function','name':'exec_command'}]).tools[0]['name'] == 'exec_command'
 long_names = ToolNames([{'type':'namespace','name':'namespace.with.long-punctuation-' * 3,'tools':[{'type':'function','name':'spawn_agent'}]}])
 assert all(len(tool['name']) <= 64 for tool in long_names.tools)

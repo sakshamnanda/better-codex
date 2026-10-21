@@ -151,6 +151,7 @@ def main():
     service = None
     child = None
     pipe = None
+    lifecycle = None
     try:
         environment = app_environment()
         service = Service()
@@ -161,6 +162,7 @@ def main():
         activate(config,service.base_url,None,ROOT / 'backups',TRANSACTION)
         environment['CODEX_HOME'] = str(config.parent)
         environment['CODEX_CLI_PATH'] = str(Path(deployment['source_app']) / 'resources/codex.exe')
+        environment['BETTER_CODEX_SUBAGENTS'] = str(ROOT / 'subagent_lifecycle.py')
         pipe = PrivatePipe()
         # No user-data override: use the installed app's actual signed-in profile.
         child = pipe.launch([str(Path(deployment['source_app']) / 'ChatGPT.exe')],cwd=config.parent,env=environment)
@@ -175,6 +177,10 @@ def main():
         from api_settings import Settings
         settings = Settings(ROOT,service.apply_settings,service.refresh_catalog,lambda:service.current)
         ui_applied = pipe.patch(overlay['filename'],overlay['original_source_sha256'],source,SUPPORT / 'Live-Overlay-Check.json',additional,settings.handle)
+        from build_compatibility import UPDATED_HASHES
+        if ui_applied and deployment['installed_file_hashes'] == UPDATED_HASHES:
+            from subagent_lifecycle import LifecycleServer
+            lifecycle = LifecycleServer(pipe.subagent_request, SUPPORT)
         state = json.loads((SUPPORT / 'Gateway-State.json').read_text())
         state.update(app_pid=child.pid,mode='installed_signed_app',package_files_replaced=False)
         (SUPPORT / 'Gateway-State.json').write_text(json.dumps(state))
@@ -190,6 +196,7 @@ def main():
             except subprocess.TimeoutExpired:
                 child.terminate()
                 child.wait(timeout=5)
+        if lifecycle: lifecycle.close()
         if pipe: pipe.close()
         rollback(TRANSACTION)
         if service: service.stop()

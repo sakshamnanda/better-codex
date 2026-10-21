@@ -6,6 +6,7 @@ External models select tools; the installed Codex runtime executes them. The gat
 
 - Readable, bounded tool aliases replace opaque hashes; collisions are rejected and namespaces restored exactly.
 - Delegation guidance uses actual advertised schemas for creating, messaging, waiting, resuming and closing agents. Messages are never silently changed into spawns or given invented target IDs.
+- The reviewed 26.1013 runtime truncates the `spawn_agent` model hint to five entries. The gateway expands that hint from the enabled picker catalog for native and external parents, retaining model-specific efforts, service tiers, schemas and fork rules. Disabled and hidden models stay excluded. Offline checks verify all 25 current choices and an Experiential Labs child that completes and resumes; live provider inference was not repeated.
 - External catalog entries use the current V2 subagent backend, native text patch tools, asynchronous user questions and clock tools. Native Node tool approval remains required. Existing chats can retain V1; both interfaces are supported.
 - Native text tools become JSON functions with one `input` string. Returned items and streams reconstruct the native text call; Codex parses and executes it.
 - Client tool discovery becomes a JSON function and returns a native `tool_search_call`. Loaded schemas in discovery history remain callable. Already declared deferred schemas are supplied inline to providers; this can increase prompt size.
@@ -29,9 +30,15 @@ External models select tools; the installed Codex runtime executes them. The gat
 
 External models retain `tool_mode: direct`: JSON schemas instead of ChatGPT's code-mode-only entry point, with native executors and permissions. Identical model decisions and every OpenAI-hosted feature are not promised.
 
+External chats can clean up their saved subagents through the local helper on the reviewed 26.1013 build. Run `python "$env:BETTER_CODEX_SUBAGENTS" list` through the normal shell tool, then run the same command with `close <thread-UUID>` or `delete <thread-UUID>`. Use the returned UUIDs; V2 task names are different identifiers. Clean up descendants before their parent. Close calls native `thread/archive`, unloading the worker and retaining its history. Delete closes the worker if necessary, checks again for children, then calls native `thread/delete` to permanently remove its saved chat history. Collect needed results before deleting.
+
+The helper reads `CODEX_THREAD_ID` from the shell environment and checks the native descendant inventory. Its list maps task paths and nicknames to UUIDs, with runtime and archive status, without returning transcripts. It refuses the caller itself and targets outside that inventory. Native shell permissions and approvals still apply. The connection stays on authenticated loopback and uses the owned renderer's existing local backend RPC; providers receive no connection tokens or native authentication. Unsupported builds or unavailable renderer bindings fail without touching chat files. This requires the updated custom launcher; a running app keeps its current code until the next launch.
+
+`python tests/check-subagent-cleanup.py` covers ownership, descendants, a spawn during shutdown, native failures, HTTP authentication and CLI behavior. The offline `check-delegation-runtime.py` fixture also verifies that a synthetic native child unloads on close, keeps its archived history, and disappears from its native descendant inventory after deletion. The full desktop helper has not been exercised in a restarted desktop session.
+
 Codex `wait_threads` accepts integer `timeoutMs` values from 0 to 120000 (two minutes), confirmed in the supported 26.1013.4894 desktop validator. External models receive that limit in shared guidance and the tool schema. The gateway caps oversized integer waits before returning them to Codex, keeping streamed arguments and completed calls consistent. Targets and cursors stay intact; repeated bounded waits can follow longer work. Native requests and unrelated tools are unchanged.
 
-The installed runtime places external delegation messages in an `encrypted_content` slot even though their tool arguments are plaintext. Forwarding that slot to ChatGPT causes the child stream to close before `response.completed`. The outer gateway now recognizes exact messages returned by external delegation tools using a bounded in-memory hash record and restores their text content before routing the child. Genuine native ciphertext and unknown content remain unchanged. After a helper restart, send a new delegation rather than retrying an old handoff whose provenance is no longer in memory.
+The installed runtime places external delegation messages in an `encrypted_content` slot even though their tool arguments are plaintext. Forwarding that slot to ChatGPT causes the child stream to close before `response.completed`. The outer gateway now recognizes exact messages returned by external delegation tools using a bounded in-memory hash record and restores their text content before routing the child. Genuine native ciphertext and unknown content remain unchanged. After a helper restart, retained external tool history restores the plaintext handoff hashes so saved workers can receive follow-up tasks.
 
 `python tests/check-delegation-runtime.py --unfixed` reproduces the failure with the installed backend and localhost mocks. The default run verifies the repair offline. `--live` explicitly uses saved credentials for a synthetic GLM-to-native delegation, verifies high reasoning on the native request, and requires both the child result and GLM's final acknowledgement. It uses an isolated scratch profile and does not read existing chats or restart the desktop.
 
@@ -51,6 +58,8 @@ The shared external-model workflow now explicitly requires reading the current p
 
 ```powershell
 python tests/check-delegation-tools.py
+python tests/check-subagent-cleanup.py
+node tests/check-subagent-renderer.cjs
 python tests/check-chat-waits.py
 python tests/check-tool-compatibility.py
 python tests/check-retired-tool-history.py

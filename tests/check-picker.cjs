@@ -30,7 +30,7 @@ if(updatedBuild)Object.assign(context,{Pf:context.Z,YU:context.CU,Fi:context.mh,
 const helper=built.slice(built.indexOf('globalThis.gatewayUpdateProviderConfig ='),built.indexOf(updatedBuild?'\nfunction e8e(e){':'\nfunction b8e(e){'));
 assert(helper.includes('function gatewayPickerMenuProps(props)'));
 vm.runInContext('const gatewayProviderConfig = ' + JSON.stringify(config) + ';\n' + helper, context);
-const chatRef = {current: false};
+const chatRef = {current: null};
 let defaultSelections = 0;
 const chatReact = {useRef: () => chatRef, useEffect: effect => effect()};
 const selectDefault = () => defaultSelections++;
@@ -46,6 +46,12 @@ assert.equal(defaultSelections, 1);
 context.gatewayChatDefaultModel(chatReact, 'saved-chat', true, selectDefault);
 context.gatewayChatDefaultModel(chatReact, null, true, selectDefault);
 assert.equal(defaultSelections, 2);
+context.gatewayChatDefaultModel(chatReact, null, true, selectDefault, 'other-project');
+assert.equal(defaultSelections, 3);
+context.gatewayChatDefaultModel(chatReact, null, true, selectDefault, 'other-project');
+assert.equal(defaultSelections, 3);
+assert(built.includes('gatewayChatDefaultModel(pG,i,!yt&&!q&&he?.isModelLocked!==!0&&jt!=null,'));
+assert(built.includes('sn(jt.model,jt.defaultReasoningEffort,{persistAsDefault:!1})},JSON.stringify([T,S.cwd])'));
 assert(built.includes('gatewayChatDefaultModel(ZW,n,(w||T)&&Qe&&!We,'));
 assert(built.includes('sA(D,`default`,T);g({slug:f.defaultModelSlug,'));
 (async () => {

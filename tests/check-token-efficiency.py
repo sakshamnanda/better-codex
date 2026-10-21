@@ -6,7 +6,7 @@ import json
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src/gateway'))
-from core import GatewayCore, GatewayError, ToolNames, TOKEN_EFFICIENCY, PROJECT_WORKFLOW, current_route_instructions
+from core import GatewayCore, GatewayError, ToolNames, TOKEN_EFFICIENCY, PROJECT_WORKFLOW, SUBAGENT_CLEANUP, current_route_instructions
 from chat_bridge import response_events
 from provider_relay import translated_events
 
@@ -67,7 +67,7 @@ forwarded=json.loads(second.body)
 assert forwarded['input'] == json.loads(first.body)['input']
 assert forwarded['input'][-1]['output'] == history[-1]['output']
 assert payload == source
-for text in (TOKEN_EFFICIENCY, PROJECT_WORKFLOW, current_route_instructions(payload['model'],'nanogpt')):
+for text in (TOKEN_EFFICIENCY, PROJECT_WORKFLOW, SUBAGENT_CLEANUP, current_route_instructions(payload['model'],'nanogpt')):
     assert forwarded['instructions'].count(text) == 1
 assert 'OWNED_PROJECT_INSTRUCTIONS' in forwarded['instructions']
 native=json.dumps({**payload,'model':'native-fixture'}).encode()

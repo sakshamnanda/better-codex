@@ -1,13 +1,13 @@
 // Initialize each new chat once; later user choices and existing chats keep their model.
-function gatewayChatDefaultModel(React, conversationId, ready, selectDefault) {
-  const initialized = React.useRef(false);
+function gatewayChatDefaultModel(React, conversationId, ready, selectDefault, contextKey = ``) {
+  const initialized = React.useRef(null);
   React.useEffect(() => {
     if (conversationId != null) {
-      initialized.current = false;
+      initialized.current = null;
       return;
     }
-    if (!ready || initialized.current) return;
-    initialized.current = true;
+    if (!ready || initialized.current === contextKey) return;
+    initialized.current = contextKey;
     selectDefault();
-  }, [conversationId, ready, selectDefault]);
+  }, [conversationId, ready, selectDefault, contextKey]);
 }

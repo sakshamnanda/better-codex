@@ -56,6 +56,20 @@ TOKEN_EFFICIENCY = (
     'Do not discard instructions, user requests or tool evidence to meet a token budget. '
     'Checkpoint summaries should preserve required instruction-file references, findings, changed files and unresolved work without copying whole files.\n'
 )
+SUBAGENT_CLEANUP = (
+    '\n\nSubagent cleanup in the custom Windows desktop:\n'
+    'When an authorized task needs worker cleanup, use advertised native close/delete tools if available. '
+    'Otherwise, if exec_command is available, run Python on the path in the BETTER_CODEX_SUBAGENTS environment variable: '
+    'PowerShell: python "$env:BETTER_CODEX_SUBAGENTS" list; then python "$env:BETTER_CODEX_SUBAGENTS" close <thread-UUID> '
+    'or python "$env:BETTER_CODEX_SUBAGENTS" delete <thread-UUID>. Run each command separately. '
+    'The helper uses CODEX_THREAD_ID and only accepts saved descendants of the calling chat. '
+    'Use its list result for actual thread UUIDs; V2 task names are not thread UUIDs. Clean up descendants before their parents. '
+    'Close unloads and archives the worker, retaining its history. Delete permanently removes its saved chat history; use it when the task requires deletion. '
+    'Collect needed results before cleanup. An interrupt does not close or delete an agent. '
+    'The helper requires the updated custom launcher and ordinary Codex shell permissions/approvals. '
+    'If it is unavailable or refuses a target, report that limitation; do not edit chat databases or claim cleanup succeeded. '
+    'This does not authorize new agents or deletion of unrelated chats.\n'
+)
 
 
 def current_route_instructions(model, provider, providers=None):
@@ -320,11 +334,11 @@ class ToolNames:
         contracts = {
             'spawn_agent': 'Creates a new agent. Supply exactly its declared creation arguments; wait arguments do not create an agent. Retain the returned ID/task name for subsequent calls.',
             'send_input': 'Messages an existing live agent. It does not create or reopen an agent. Use the exact returned agent ID, not its display nickname.',
-            'send_message': 'Messages an existing live agent; it does not create or reopen one. Use its exact declared target identifier.',
+            'send_message': 'Delivers a message to an existing agent but does not start a turn. A finished agent is idle: use followup_task to give it more work. Use its exact declared target identifier.',
             'wait_agent': 'Waits for agents according to its declared schema; version 2 waits for mailbox updates. Its wait arguments do not belong to spawn_agent.',
             'close_agent': 'Closes an agent. After a successful close, do not message that ID again unless an advertised resume tool succeeds. Use spawn_agent for a new worker.',
             'resume_agent': 'Resumes a closed existing agent by its exact ID. Check success before messaging it; this does not create a new worker.',
-            'followup_task': 'Assigns a follow-up to an existing agent and starts it if idle; it does not create an agent.',
+            'followup_task': 'Assigns work to an existing agent and starts a new turn when it is idle, including after its final answer. Use this to restart a finished agent; send_message alone will not restart it. It does not create an agent.',
             'list_agents': 'Lists the actual current agents and their identifiers; use it instead of guessing a target.',
             'interrupt_agent': 'Interrupts an existing agent; it does not create or close an agent.',
         }
@@ -533,7 +547,7 @@ class GatewayCore:
         instructions = forwarded.get("instructions") or ""
         if not isinstance(instructions, str):
             raise GatewayError("Instructions must be text", 422)
-        for guidance in (PROJECT_WORKFLOW, TOKEN_EFFICIENCY, current_route_instructions(model, provider, self.providers), names.delegation_guidance()):
+        for guidance in (PROJECT_WORKFLOW, TOKEN_EFFICIENCY, SUBAGENT_CLEANUP, current_route_instructions(model, provider, self.providers), names.delegation_guidance()):
             if guidance and guidance not in instructions: instructions += guidance
         forwarded["instructions"] = instructions
         tier = self.models.get(model, {}).get('service_tier')

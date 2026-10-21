@@ -78,7 +78,7 @@ def remember_external_handoffs(event):
         with HANDOFF_LOCK:
             PLAINTEXT_HANDOFFS[digest] = None
             PLAINTEXT_HANDOFFS.move_to_end(digest)
-            # shortcut: bounded process-local provenance; old handoffs need a new send after restart.
+            # Retained external tool history restores these hashes after a restart.
             if len(PLAINTEXT_HANDOFFS) > 1024: PLAINTEXT_HANDOFFS.popitem(last=False)
 
 
@@ -124,7 +124,40 @@ def external_headers(generation=None):
     return headers
 
 
-def prepare_routed_request(core, target, headers, body, profile_settings=None, profiles=None):
+def expand_subagent_models(incoming, catalog):
+    """Replace the native five-model hint with the enabled picker catalog."""
+    lines = ['Available model overrides (optional; inherited parent model is preferred):']
+    for model in catalog['models']:
+        if model.get('visibility') != 'list': continue
+        efforts = ', '.join(level['effort'] + (' (default)' if level['effort'] == model['default_reasoning_level'] else '')
+                            for level in model['supported_reasoning_levels'])
+        line = f"- `{model['slug']}`: {model['description']} Reasoning efforts: {efforts}."
+        tiers = ', '.join(tier['id'] for tier in model.get('service_tiers', []))
+        if tiers: line += f' Service tiers: {tiers}.'
+        lines.append(line)
+    listing = '\n'.join(lines) + '\n'
+
+    def update(tools, namespace=None):
+        for tool in tools:
+            if not isinstance(tool, dict): continue
+            if tool.get('type') == 'namespace':
+                update(tool.get('tools', []), tool.get('name'))
+            elif (tool.get('type') == 'function' and tool.get('name') == 'spawn_agent'
+                  and namespace in {None, 'collaboration', 'multi_agent_v1', 'functions'}):
+                description = tool.get('description', '')
+                if 'Available model overrides' in description:
+                    description = re.sub(r'Available model overrides[^\n]*\n(?:- `[^\n]*\n)*',
+                                         lambda _: listing, description, count=1)
+                else: description = listing + description
+                tool['description'] = description
+
+    update(incoming.get('tools', []))
+    for item in incoming.get('input', []) if isinstance(incoming.get('input'), list) else []:
+        if isinstance(item, dict) and item.get('type') in {'additional_tools', 'tool_search_output'}:
+            update(item.get('tools', []))
+
+
+def prepare_routed_request(core, target, headers, body, profile_settings=None, profiles=None, catalog=None):
     external=core.external
     profile_settings=PROFILE_SETTINGS if profile_settings is None else profile_settings
     profiles=PROFILES if profiles is None else profiles
@@ -136,6 +169,10 @@ def prepare_routed_request(core, target, headers, body, profile_settings=None, p
     encoding = next((value for name,value in headers if name.lower() == 'content-encoding'), None)
     incoming = json.loads(decode_body(body, encoding))
     if not isinstance(incoming,dict) or not isinstance(incoming.get('model'),str): raise GatewayError('Invalid Responses model')
+    if catalog is not None and incoming['model'] in set(core.external) | core.native_models:
+        expand_subagent_models(incoming, catalog)
+        headers = [(name,value) for name,value in headers if name.lower() not in {'content-encoding','content-length'}]
+        body = json.dumps(incoming).encode()
     history = incoming.get('input')
     triggers = [index for index,item in enumerate(history) if isinstance(item,dict) and item.get('type') == 'compaction_trigger'] if isinstance(history,list) else []
     if triggers:
@@ -152,6 +189,10 @@ def prepare_routed_request(core, target, headers, body, profile_settings=None, p
             # Provider-default effort can be none; the native checkpoint needs low or above.
             incoming = {**incoming,'model':COMPACTION_MODEL,'reasoning':{**(reasoning or {}),'effort':'low'}}
     if incoming['model'] in external or incoming['model'] in core.native_models:
+        if incoming['model'] in external and isinstance(history, list):
+            # A resumed child retains its original task as well as the new follow-up.
+            # Recover observed plaintext from the parent's saved tool calls first.
+            remember_external_handoffs({'type': 'response.completed', 'response': {'output': history}})
         if isinstance(incoming.get('input'), list):
             incoming = {**incoming, 'input': normalize_agent_handoffs(incoming['input'])}
         incoming = apply_profile(incoming, profile_settings, profiles)
@@ -330,7 +371,8 @@ class MixedGateway(BaseHTTPRequestHandler):
             if len(body) != length: raise GatewayError('Incomplete request body')
             settings=getattr(self,'runtime_settings',None)
             profile_settings,profiles=(settings.profile_settings,settings.profiles) if settings else (PROFILE_SETTINGS,PROFILES)
-            prepared, incoming, removed = prepare_routed_request(self.core(),self.path,list(self.headers.items()),body,profile_settings,profiles)
+            catalog = settings.catalog if settings else getattr(self.server, 'model_catalog', None)
+            prepared, incoming, removed = prepare_routed_request(self.core(),self.path,list(self.headers.items()),body,profile_settings,profiles,catalog)
             model = incoming.get('model')
             event = {'kind': 'responses', 'model': model, 'provider': prepared.provider, 'upstream_eof': False}
             event.update(profile_diagnostics(model, profile_settings, profiles))

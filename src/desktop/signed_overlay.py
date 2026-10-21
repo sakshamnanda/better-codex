@@ -188,6 +188,19 @@ class PrivatePipe:
             return False
         return True
 
+    def subagent_request(self, method, params):
+        if method not in {'thread/list', 'thread/archive', 'thread/delete'}:
+            raise ValueError('Unsupported native cleanup operation')
+        if len(self.trusted_contexts) != 1:
+            raise RuntimeError('Owned renderer is unavailable')
+        expression = 'globalThis.gatewaySubagentRequest(' + json.dumps(method) + ',' + json.dumps(params).replace('<', '\\u003c') + ')'
+        result = self.call('Runtime.evaluate', {'expression': expression, 'awaitPromise': True,
+            'returnByValue': True, 'contextId': next(iter(self.trusted_contexts))},
+            session=self.settings_session, timeout=30)
+        if result.get('exceptionDetails') or 'value' not in result.get('result', {}):
+            raise RuntimeError('Native cleanup request failed')
+        return result['result']['value']
+
     def settings_event(self, event):
         """Only the owned default app context can request bounded local settings."""
         if event.get('sessionId') != self.settings_session: return
