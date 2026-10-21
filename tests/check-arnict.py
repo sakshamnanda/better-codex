@@ -31,7 +31,7 @@ for mid in provider['models']:
     route = MODELS[mid]
     assert route['provider'] == 'arnict' and route['output_limit'] == 131072
     assert route['metadata']['context_window'] == route['metadata']['max_context_window'] == 1048576
-    assert route['metadata']['input_modalities'] == ['text']
+    assert route['metadata']['input_modalities'] == (['text', 'image'] if mid == 'zai/glm-5.3-flash-uncensored' else ['text'])
     assert route['metadata']['default_reasoning_level'] == 'low'
     assert [e['effort'] for e in route['metadata']['supported_reasoning_levels']] == ['low', 'high', 'max']
     for effort in ('low', 'high', 'max'):

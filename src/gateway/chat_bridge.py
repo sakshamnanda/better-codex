@@ -1,7 +1,7 @@
-"""Text and client function-tools bridge for OpenCode's Chat Completions API."""
+"""Text, inline images and client function-tools bridge for Chat Completions."""
 import json
 import secrets
-from core import GatewayError
+from core import GatewayError, validate_image
 
 # ponytail: bounded, process-local reasoning continuity; new chats after gateway restart.
 REASONING = {}
@@ -13,10 +13,19 @@ def text_content(content):
     if isinstance(content, list):
         parts = []
         for part in content:
-            if not isinstance(part, dict) or part.get("type") not in {"input_text", "output_text", "text"}:
-                raise GatewayError("This model's test route currently accepts text only", 422)
-            parts.append(part.get("text", ""))
-        return "\n".join(parts)
+            if isinstance(part, dict) and part.get('type') == 'input_image':
+                validate_image(part)
+                image = {'url': part['image_url']}
+                if 'detail' in part:
+                    image['detail'] = 'high' if part['detail'] == 'original' else part['detail']
+                parts.append({'type': 'image_url', 'image_url': image})
+            elif isinstance(part, dict) and part.get('type') in {'input_text', 'output_text', 'text'} and isinstance(part.get('text'), str):
+                parts.append({'type': 'text', 'text': part['text']})
+            else:
+                raise GatewayError('Unsupported Chat Completions content', 422)
+        if any(part['type'] == 'image_url' for part in parts):
+            return parts
+        return '\n'.join(part['text'] for part in parts)
     raise GatewayError("Invalid text content", 422)
 
 

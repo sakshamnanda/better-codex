@@ -78,6 +78,33 @@
     },
     "enabled": true
   },
+  "routeway": {
+    "label": "Routeway",
+    "adapter": "chat_completions",
+    "endpoint": "https://api.routeway.ai/v1/chat/completions",
+    "default_model": "glm-5.3-flash-uncensored",
+    "models": {
+      "glm-5.3-flash-cybersecurity": {
+        "output_limit": 32768,
+        "metadata_mode": "custom",
+        "reasoning_mode": "provider_default",
+        "enabled": true
+      },
+      "glm-5.3-flash-cybersecurity:flex": {
+        "output_limit": 32768,
+        "metadata_mode": "custom",
+        "reasoning_mode": "provider_default",
+        "enabled": true
+      },
+      "glm-5.3-flash-uncensored": {
+        "output_limit": 32768,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      }
+    },
+    "enabled": true
+  },
   "opencode": {
     "label": "OpenCode Zen",
     "adapter": "opencode",
@@ -96,6 +123,60 @@
         "send_variant": false,
         "metadata_mode": "provider",
         "reasoning_mode": "provider_default",
+        "enabled": true
+      }
+    },
+    "enabled": true
+  },
+  "layercloud": {
+    "label": "LayerCloud",
+    "adapter": "chat_completions",
+    "endpoint": "https://ai.layercloud.org/v1/chat/completions",
+    "default_model": "deepseek/deepseek-v4.1-flash:jailbreak",
+    "models": {
+      "deepseek/deepseek-v4.1-flash:jailbreak": {
+        "output_limit": 943718,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "zai/glm-5.3:jailbreak": {
+        "output_limit": 262144,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "zai/glm-5.3-flash:uncensored": {
+        "output_limit": 131072,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "openai/gpt-6-astra:jailbreak": {
+        "output_limit": 128000,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      },
+      "openai/gpt-5.6-sol:jailbreak": {
+        "output_limit": 128000,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
+        "enabled": true
+      }
+    },
+    "enabled": true
+  },
+  "experiential": {
+    "label": "Experiential Labs",
+    "adapter": "chat_completions",
+    "endpoint": "https://api.experientiallabs.ai/v1/chat/completions",
+    "default_model": "glm-5.3-flash-abliterated",
+    "models": {
+      "glm-5.3-flash-abliterated": {
+        "output_limit": 131072,
+        "metadata_mode": "custom",
+        "reasoning_mode": "explicit",
         "enabled": true
       }
     },

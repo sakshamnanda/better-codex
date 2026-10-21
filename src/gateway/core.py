@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import gzip
+import base64
+import binascii
 import hashlib
 import hmac
 import io
@@ -17,8 +19,8 @@ from urllib.parse import urlsplit
 
 CHATGPT = "https://chatgpt.com"
 from provider_registry import PROVIDERS, MODELS, ROUTES as EXTERNAL
-# ponytail: bounded prototype payloads; expand only after attachment tests.
-MAX_BODY = 32 * 1024 * 1024
+# Bound both wire and decoded bodies, including long histories and inline images.
+MAX_BODY = 128 * 1024 * 1024
 # Confirmed in the supported desktop build's wait_threads validator.
 CHAT_WAIT_MAX_MS = 120000
 TERMINAL_OUTPUT_TOKENS = 2000
@@ -426,6 +428,19 @@ class ToolNames:
         yield self.response_event(event)
 
 
+def validate_image(part):
+    # Pasted pixels are portable; native attachment URLs may carry authentication.
+    if set(part) - {'type', 'image_url', 'detail'} or part.get('detail', 'auto') not in ('auto', 'low', 'high', 'original'):
+        raise GatewayError('Unsupported image fields or detail', 422)
+    url = part.get('image_url')
+    if not isinstance(url, str) or not re.fullmatch(r'data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}', url):
+        raise GatewayError('External images require inline PNG, JPEG, WebP or GIF data', 422)
+    try:
+        base64.b64decode(url.split(',', 1)[1], validate=True)
+    except (ValueError, binascii.Error):
+        raise GatewayError('Invalid base64 image data', 422) from None
+
+
 @dataclass(frozen=True)
 class PreparedRequest:
     provider: str
@@ -507,6 +522,12 @@ class GatewayCore:
             for content in item.get("content", []) if isinstance(item.get("content"), list) else []:
                 if isinstance(content, dict) and (content.get("file_id") is not None or content.get("type") == "input_file"):
                     raise GatewayError("Native file attachments are not verified for this provider", 422)
+                if isinstance(content, dict) and content.get('type') == 'input_image':
+                    if 'image' not in self.models[model]['metadata'].get('input_modalities', []):
+                        raise GatewayError('This model does not support image input', 422)
+                    if item.get('role') != 'user':
+                        raise GatewayError('Images require a user message', 422)
+                    validate_image(content)
             inputs.append(names.request_item(item))
         forwarded["input"] = inputs
         instructions = forwarded.get("instructions") or ""

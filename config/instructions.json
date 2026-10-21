@@ -17,7 +17,16 @@
     "z-ai/glm-5.3-flash-cybersecurity": "glm-5-3-flash.md",
     "zai/glm-5.3-flash-uncensored": "glm-5-3-flash.md",
     "zai/glm-5.3-uncensored": "glm-5-3-flash.md",
+    "glm-5.3-flash-uncensored": "glm-5-3-flash.md",
+    "glm-5.3-flash-cybersecurity": "glm-5-3-flash.md",
+    "glm-5.3-flash-cybersecurity:flex": "glm-5-3-flash.md",
     "@preset/glm-flash-latest": "glm-5-3-flash.md",
-    "@preset/deepseek-flash-latest": "deepseek-4-1.md"
+    "@preset/deepseek-flash-latest": "deepseek-4-1.md",
+    "deepseek/deepseek-v4.1-flash:jailbreak": "deepseek-4-1.md",
+    "zai/glm-5.3:jailbreak": "glm-5-3-flash.md",
+    "zai/glm-5.3-flash:uncensored": "glm-5-3-flash.md",
+    "openai/gpt-6-astra:jailbreak": "chatgpt.md",
+    "openai/gpt-5.6-sol:jailbreak": "chatgpt.md",
+    "glm-5.3-flash-abliterated": "glm-5-3-flash.md"
   }
 }

@@ -144,6 +144,7 @@ def prepare_configuration(request, providers, catalog):
                      supported_reasoning_levels=[{'effort':e, 'description':'Provider default (no reasoning override)' if reasoning_mode=='provider_default' else e.capitalize() + ' reasoning effort'} for e in efforts],
                      supports_reasoning_effort_updates=len(efforts) > 1)
         if mid not in metadata:
+            model['input_modalities'] = ['text']
             model['description'] = 'Custom model through ' + providers[pid]['label'] + '; verify provider capabilities before use.'
             # Do not copy another model's persistent identity/instructions.
             model['model_messages'] = {

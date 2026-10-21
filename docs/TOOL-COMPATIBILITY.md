@@ -24,7 +24,8 @@ External models select tools; the installed Codex runtime executes them. The gat
 | Cross-chat messages | Real sender delivery confirmed; native received-message shape reproduced with Merge, then real GLM acknowledged translated synthetic context | Actual recipient retry after loading the fix remains unverified |
 | Instructions/model switches | Original context preserved; matching profile supplied once per request | Delivery cannot force perfect obedience |
 | Categories/effort | Existing picker checks pass; native callbacks retained | Effort support remains model-specific |
-| OpenAI-hosted tools and attachments | Unsupported forms rejected | Text-only external routes do not acquire hosted search, file search, computer use, image generation or encrypted native reasoning |
+| Pasted images | Inline data and both relay hops verified offline for nine advertised vision routes | Live image inference remains unverified; native file IDs, remote attachment URLs and video are rejected |
+| OpenAI-hosted tools and native attachments | Unsupported forms rejected | External routes do not acquire hosted search, file search, computer use, image generation or encrypted native reasoning |
 
 External models retain `tool_mode: direct`: JSON schemas instead of ChatGPT's code-mode-only entry point, with native executors and permissions. Identical model decisions and every OpenAI-hosted feature are not promised.
 

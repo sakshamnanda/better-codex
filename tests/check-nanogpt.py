@@ -12,7 +12,7 @@ mid = 'z-ai/glm-5.3-flash-uncensored'
 assert PROVIDERS['nanogpt']['default_model'] == mid
 assert MODELS[mid]['output_limit'] == 32768
 assert MODELS[mid]['metadata']['context_window'] == 1048576
-assert MODELS[mid]['metadata']['input_modalities'] == ['text']
+assert MODELS[mid]['metadata']['input_modalities'] == ['text', 'image']
 reads = []
 def key(provider):
     reads.append(provider)
