@@ -87,6 +87,37 @@ try:
 finally:
     mixed.open_upstream,mixed.record=old_open,old_record
 
+# A provider 429 must retain its safe message without triggering desktop retries.
+attempts = []
+events = []
+try:
+    def rate_limited_provider(*args):
+        attempts.append(True)
+        raise urllib.error.HTTPError('https://provider.invalid', 429, 'fixture', {},
+            io.BytesIO(json.dumps({'error': {'message': private}}).encode()))
+    relay.key_supplier = lambda provider: 'dummy-provider-fixture'
+    relay.open_provider = rate_limited_provider
+    relay.record = events.append
+    relay.save_diagnostics = lambda: None
+    fake = FakeRequest(); fake.rfile = io.BytesIO(fake.payload)
+    relay.RealGateway.do_POST(fake)
+    assert fake.observed == (429, 'Provider rate limit reached', False, 'provider_test_error')
+    assert len(attempts) == 1 and events[0]['http_status'] == 429
+    response = json.dumps({'error': {'code': fake.observed[3], 'message': fake.observed[1]}}).encode()
+    assert relay.public_relay_detail(response) == ('provider_test_error', 'Provider rate limit reached')
+    def outer_rate_limited(*args, **kwargs):
+        raise urllib.error.HTTPError('http://fixture.invalid', 429, 'fixture', {}, io.BytesIO(response))
+    mixed.open_upstream = outer_rate_limited; mixed.record = lambda event: None
+    outer = OuterRequest(); outer.rfile = io.BytesIO(FakeRequest.payload)
+    mixed.MixedGateway.do_POST(outer)
+    assert outer.observed == (400, 'Provider rate limit reached', 'provider_test_error')
+    assert private not in json.dumps(events) and private not in response.decode()
+    mixed.MixedGateway.request_failure(outer, 429, 'Native fixture error', False, {'provider': 'openai'})
+    assert outer.observed == (429, 'Native fixture error', 'replica_gateway_error')
+finally:
+    relay.key_supplier, relay.open_provider, relay.record, relay.save_diagnostics = original_key, original_open, original_record, original_save
+    mixed.open_upstream, mixed.record = old_open, old_record
+
 # The outer hop must leave time for the inner timeout's sanitized response.
 for failure, status, category in ((TimeoutError(private), 504, 'timeout'),
         (urllib.error.URLError(TimeoutError(private)), 504, 'timeout'),

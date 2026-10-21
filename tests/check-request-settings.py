@@ -74,7 +74,7 @@ class Stream:
         self.count+=1;return next(self.lines,b'')
     def read1(self,limit):return self.readline(limit)
 
-def fake_provider(prepared):
+def fake_provider(prepared, event=None):
     assert prepared.url in {'https://fixture.example/old/responses','https://fixture.example/new/responses'}
     value=json.loads(prepared.body);version=prepared.url.split('/')[-2]
     assert dict(prepared.headers)['Authorization']=='Bearer owned-dummy-'+version+'-key'

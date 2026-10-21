@@ -223,8 +223,8 @@ class MixedGateway(BaseHTTPRequestHandler):
     def request_failure(self, status, message, streaming, event, code='replica_gateway_error'):
         external = event is not None and event.get('provider') != 'openai'
         if not streaming:
-            # The desktop retries 5xx responses, issuing another billable request.
-            self.fail(400 if external and status in {408, 502, 504} else status, message, code=code)
+            # The desktop retries 429 and 5xx responses, repeating provider requests.
+            self.fail(400 if external and status in {408, 429, 502, 504} else status, message, code=code)
         elif external:
             digest = getattr(self, 'external_request_digest', None)
             if digest is not None:

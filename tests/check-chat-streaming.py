@@ -87,7 +87,7 @@ class GatedReply(io.BytesIO):
 
 relay = mixed.external_adapter
 attempts = []
-def provider(prepared):
+def provider(prepared, event=None):
     body = json.loads(prepared.body)
     assert body['stream'] is True and body['stream_options']['include_usage'] is True
     assert dict(prepared.headers)['Authorization'] == 'Bearer dummy-owned-provider-fixture'

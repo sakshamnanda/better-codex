@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from email.utils import parsedate_to_datetime
 import http.client
 from contextlib import nullcontext
 import importlib.util
@@ -9,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import random
 import subprocess
 import threading
 import time
@@ -32,6 +34,7 @@ AGENTS_MARKER = "CODEX_REAL_PROVIDER_TEST_AGENTS_OK"
 BLOCKED_MODELS = {}
 PROVIDER_TIMEOUT = 120
 PUBLIC_RELAY_ERRORS = frozenset({
+    'Provider rate limit reached',
     'Provider response timed out; no automatic retry was made',
     'Provider test connection failed; no automatic retry was made',
     'Provider rejected the request format',
@@ -154,7 +157,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise GatewayError("Provider redirects are not accepted", 502)
 
 
-def open_provider(prepared):
+def open_provider(prepared, event=None):
     # Ignore inherited proxies; TLS certificate verification stays enabled.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     request = urllib.request.Request(prepared.url, data=prepared.body,
@@ -162,7 +165,35 @@ def open_provider(prepared):
     request.add_header("User-Agent", "Codex-Desktop-Provider-Gateway/0.1 (local compatibility test)")
     if prepared.url.endswith("/chat/completions"):
         request.add_header("Accept", "text/event-stream")
-    return opener.open(request, timeout=PROVIDER_TIMEOUT)
+    deadline = time.monotonic() + PROVIDER_TIMEOUT
+    waited = 0
+    for attempt in range(4):
+        if event is not None:
+            event['provider_attempts'] = attempt + 1
+        try:
+            timeout = PROVIDER_TIMEOUT if attempt == 0 else deadline - time.monotonic()
+            return opener.open(request, timeout=max(0.001, timeout))
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and event is not None:
+                event['provider_rate_limit_responses'] = event.get('provider_rate_limit_responses', 0) + 1
+            if error.code != 429 or attempt == 3:
+                raise
+            delay = 2 ** (attempt + 1) + random.uniform(0, 0.5)
+            retry_after = error.headers.get('Retry-After') if error.headers else None
+            if retry_after:
+                try:
+                    delay = int(retry_after) if retry_after.isascii() and retry_after.isdecimal() else max(0, parsedate_to_datetime(retry_after).timestamp() - time.time())
+                except (ValueError, TypeError, OverflowError):
+                    pass
+            if waited + delay > 30 or delay >= deadline - time.monotonic():
+                raise
+            # Retry only a rejected request, before any response stream starts.
+            error.close()
+            waited += delay
+            if event is not None:
+                event['rate_limit_retries'] = attempt + 1
+                event['rate_limit_wait_seconds'] = round(waited, 3)
+            time.sleep(delay)
 
 
 def translated_events(stream, names):
@@ -303,7 +334,7 @@ class RealGateway(RelayBase):
                 stream_events = response_events(engine.complete(outgoing), prepared.tools)
             else:
                 event['provider_stage'] = 'response_headers'
-                response_context = open_provider(prepared)
+                response_context = open_provider(prepared, event)
             with response_context as upstream:
                 if upstream is None:
                     pass
